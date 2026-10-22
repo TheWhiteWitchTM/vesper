@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Vesper
+GenericName=Media Player
+Comment=Music and video for the quiet hours
+Exec=/home/andreas/Projects/vesper/vesper %F
+Icon=/home/andreas/Projects/vesper/resources/vesper-512.png
+Terminal=false
+Type=Application
+Categories=AudioVideo;Player;Audio;Video;
+MimeType=audio/mpeg;audio/flac;audio/ogg;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/mp4;audio/x-m4a;audio/wav;audio/x-wav;audio/aac;video/mp4;video/x-matroska;video/webm;video/x-msvideo;video/quicktime;application/ogg;
+StartupWMClass=vesper
+Keywords=music;video;player;vlc;

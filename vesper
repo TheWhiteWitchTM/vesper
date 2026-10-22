@@ -1,0 +1,12 @@
+#!/bin/bash
+# Launch Vesper with the bundled VLC plugins on the library path.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIBDIR="$DIR/third_party/vlc/usr/lib/x86_64-linux-gnu/vlc"
+export VLC_PLUGIN_PATH="${VLC_PLUGIN_PATH:-$LIBDIR/plugins}"
+export LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+BIN="$DIR/build/vesper"
+if [[ ! -x "$BIN" ]]; then
+    echo "Vesper is not built yet. Run scripts/build.sh" >&2
+    exit 1
+fi
+exec "$BIN" "$@"

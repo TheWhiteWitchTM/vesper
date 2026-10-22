@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="style.qss">resources/vesper.qss</file>
+        <file alias="icon.svg">resources/vesper.svg</file>
+        <file alias="icon-512.png">resources/vesper-512.png</file>
+    </qresource>
+</RCC>
