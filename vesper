@@ -1,6 +1,12 @@
 #!/bin/bash
 # Launch Vesper. Uses the build when Qt is installed, and dist/ when it is not.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# COSMIC Bar is offscreen and used to pass that platform to everything it
+# opened. With a real display, drop it so this player shows a window.
+if [ "${QT_QPA_PLATFORM:-}" = "offscreen" ] && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
+    unset QT_QPA_PLATFORM
+    unset QT_ENABLE_HIGHDPI_SCALING
+fi
 LIBDIR="$DIR/third_party/vlc/usr/lib/x86_64-linux-gnu/vlc"
 export VLC_PLUGIN_PATH="${VLC_PLUGIN_PATH:-$LIBDIR/plugins}"
 export LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
