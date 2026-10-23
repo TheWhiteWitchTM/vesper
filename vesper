@@ -1,12 +1,24 @@
 #!/bin/bash
-# Launch Vesper with the bundled VLC plugins on the library path.
+# Launch Vesper. Uses the build when Qt is installed, and dist/ when it is not.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBDIR="$DIR/third_party/vlc/usr/lib/x86_64-linux-gnu/vlc"
 export VLC_PLUGIN_PATH="${VLC_PLUGIN_PATH:-$LIBDIR/plugins}"
 export LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 BIN="$DIR/build/vesper"
-if [[ ! -x "$BIN" ]]; then
-    echo "Vesper is not built yet. Run scripts/build.sh" >&2
+DIST="$DIR/dist/vesper"
+# A system Qt older than 6.12 still satisfies ldd. Require the symbol this build uses.
+qt_ok() {
+    local core
+    [[ -x "$1" ]] || return 1
+    core="$(ldd "$1" 2>/dev/null | awk '/libQt6Core\.so/{print $3; exit}')"
+    [[ -n "$core" && -e "$core" ]] || return 1
+    readelf -V "$core" 2>/dev/null | grep -q 'Name: Qt_6\.12'
+}
+if ! qt_ok "$BIN"; then
+    if [[ -x "$DIST" ]]; then
+        exec "$DIST" "$@"
+    fi
+    echo "Vesper is not built yet. On a machine with Qt, run scripts/build.sh" >&2
     exit 1
 fi
 exec "$BIN" "$@"

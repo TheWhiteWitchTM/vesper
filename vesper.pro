@@ -7,6 +7,14 @@ TEMPLATE = app
 RESOURCES += resources.qrc
 QMAKE_CXXFLAGS += -Wall -Wextra -Wno-unused-parameter
 
+# $ORIGIN/../lib is dist/lib when the binary lives in dist/bin. The Qt prefix
+# is the fallback so ./vesper still runs from the build tree when Qt is installed.
+unix:!macx {
+    QMAKE_LFLAGS += -Wl,--disable-new-dtags
+    QMAKE_LFLAGS += '-Wl,-rpath,\'\$$ORIGIN/../lib\''
+    QMAKE_RPATHDIR += $$[QT_INSTALL_LIBS]
+}
+
 SOURCES += \
     src/main.cpp \
     src/common.cpp \

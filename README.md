@@ -10,6 +10,13 @@ scripts/build.sh
 ./vesper
 ```
 
+`./vesper` runs the build when Qt is installed. `scripts/bundle-dist.sh` writes `dist/`, the same shape as COSMIC Bar: `dist/vesper` launches it, and `dist/bin`, `dist/lib`, and `dist/plugins` carry the binary, the Qt libraries, and the plugins. That copy starts on a machine where Qt is not installed. The VLC modules sit in `dist/bin/vlc-plugins`.
+
+```bash
+scripts/bundle-dist.sh
+./dist/vesper
+```
+
 The first window is empty until you add folders. Home has three ways in:
 
 - **Add a folder** keeps that folder and checks it again next time Vesper opens.
@@ -43,7 +50,7 @@ Space plays or pauses. Left and right seek 10 seconds, Shift seeks a minute, up 
 
 ## Build notes
 
-Qt 6 (widgets, sql, dbus, network), TagLib, and libVLC headers come from the system. Pop!_OS does not ship the VLC plugin modules with libVLC alone, so `scripts/fetch-vlc-plugins.sh` downloads them into `third_party/` without root. Launch with `./vesper`, not `build/vesper` directly: the wrapper puts those plugins and Pulse's helper library on the path.
+Qt 6 (widgets, sql, dbus, network), TagLib, and libVLC headers come from the system. Pop!_OS does not ship the VLC plugin modules with libVLC alone, so `scripts/fetch-vlc-plugins.sh` downloads them into `third_party/` without root. Launch with `./vesper`, not `build/vesper` directly: the wrapper puts those plugins and Pulse's helper library on the path. `scripts/bundle-dist.sh` copies that same set into `dist/` with Qt, so the player does not need Qt installed.
 
 ```bash
 ./vesper --dump-scan /path/to/music
