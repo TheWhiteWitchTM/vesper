@@ -31,14 +31,17 @@ Vesper shows up in the app grid as **Vesper** after the desktop file is installe
 
 - Music by album, artist, track, and genre. Video as posters, with continue-watching.
 - Queue, shuffle, repeat, playlists, and a few smart lists (favorites, recently played, most played).
-- Playback resumes only when you ask. Nothing is written back into your files.
+- Playback resumes only when you ask. Artwork lookup leaves the file alone. Rename and Edit details write tags into the file and can rename it.
 - Artwork from the file, a cover next to it, then iTunes Search, MusicBrainz, and the Cover Art Archive. Lyrics from the file or LRCLIB. A short video summary from Wikipedia.
 - Equalizer, sleep timer, speed, subtitles, chapters, screenshots, mini player, always on top.
 - Video opens full screen. The menu, search, and controls hide while it plays, and come back when the pointer moves or rests on an edge.
 - Rename and organize, from Home or Settings. Scene names get a real title and a Movies or Shows folder. Tagged music goes under Artist / Album. Hash names are renamed when the file actually has a title, and left alone when it does not.
+- Songs has a genre, artist, and album browser, plus a G / PG / R label. Video is Movies, Shows, and All. A file can be renamed and retagged from its menu or from the one that is playing.
+- A folder named `private` labels its files R. Kids mode, on the transport bar or in Settings, makes shuffle play only G.
+- Id-only names are looked at once a day. A season folder is numbered from the show name with no lookup. Anything still cryptic can be sent to Grok when `XAI_API_KEY` is set, or when the key is saved in `~/.config/vesper/xai_key`.
 - Media keys and MPRIS (`org.mpris.MediaPlayer2.vesper`), so the desktop controls work.
 
-Playback starts at 199% volume. 100% was too quiet. The slider goes to 200%.
+Playback starts at 90% volume and stays where you leave it. 100% is normal. The slider goes to 200%.
 
 Vesper is MIT licensed. See `LICENSE`. The About window is Mira, The White Witch.
 
@@ -46,7 +49,7 @@ The library lives in `~/.local/share/vesper/`. Set `VESPER_DATA_DIR` to keep a t
 
 ## Keys
 
-Space plays or pauses. Left and right seek 10 seconds, Shift seeks a minute, up and down change volume. N and P skip, M mutes, H favorites, F11 is full screen, Escape leaves it, 0–9 jump through the track. Ctrl+F searches, Ctrl+O opens files, Ctrl+U opens a stream.
+Space plays or pauses. Left and right seek 10 seconds, Shift seeks a minute, up and down change volume. N and P skip, M mutes, H favorites, F11 is full screen, Escape leaves it, 0–9 jump through the track. Ctrl+F searches, Ctrl+O opens files, Ctrl+U opens a stream. F1 opens Help, with shortcuts, About, and a PayPal link to support development. Shuffle follows the page you are on: Music shuffles music, Videos shuffles videos.
 
 ## Build notes
 

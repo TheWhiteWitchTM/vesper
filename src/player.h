@@ -50,6 +50,7 @@ public:
     void setVolume(int volume);
     int volume() const { return volume_; }
     void retargetPath(const QString &from, const QString &to);
+    void noteQueued(const Track &track);
     void setMuted(bool muted);
     bool isMuted() const { return muted_; }
 
@@ -93,6 +94,7 @@ public:
 signals:
     void stateChanged(Player::State state);
     void trackChanged(const Track &track);
+    void trackMetaChanged(const Track &track);
     void positionChanged(qint64 positionMs, qint64 durationMs);
     void queueChanged();
     void volumeChanged(int volume, bool muted);

@@ -35,9 +35,9 @@ QWidget#theater {
 
 QLabel#wordmark {
     font-family: "Liberation Serif", "DejaVu Serif", serif;
-    font-size: 22pt;
-    color: #f0d7a4;
-    padding: 0 2px 2px 2px;
+    font-size: 17pt;
+    color: #f6e7c8;
+    padding: 0;
 }
 
 QLabel#hero {
@@ -60,6 +60,76 @@ QLabel#titleLabel {
 
 QLabel#muted, QLabel#artistLabel, QLabel#hint {
     color: #b7ab9a;
+}
+
+QLabel#statusLabel {
+    color: #e6dccf;
+    font-size: 10.5pt;
+    padding: 0 8px;
+}
+
+QLabel#navSection {
+    color: #8a7d6c;
+    font-size: 9pt;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 12px 14px 4px 14px;
+}
+
+QProgressBar#busyBar {
+    background: #2a241e;
+    border: none;
+    border-radius: 3px;
+    max-height: 6px;
+    min-height: 6px;
+    max-width: 72px;
+    min-width: 72px;
+}
+
+QProgressBar#busyBar::chunk {
+    background: #e4b15a;
+}
+
+QMenuBar {
+    background: #16130f;
+    color: #e6dccf;
+    border-bottom: 1px solid #2e2822;
+    padding: 2px 8px;
+    spacing: 2px;
+}
+
+QMenuBar::item {
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 8px;
+}
+
+QMenuBar::item:selected, QMenuBar::item:pressed {
+    background: #3a2e1c;
+    color: #f8ebcf;
+}
+
+QTabWidget::pane {
+    border: 1px solid #2e2822;
+    border-radius: 10px;
+    top: -1px;
+    background: #16130f;
+}
+
+QTabBar::tab {
+    background: #1c1814;
+    color: #cbbba8;
+    padding: 8px 16px;
+    border: 1px solid #2e2822;
+    border-bottom: none;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    margin-right: 4px;
+}
+
+QTabBar::tab:selected {
+    background: #3a2e1c;
+    color: #f8ebcf;
 }
 
 QLabel#banner {
@@ -133,20 +203,21 @@ QPushButton#primary:hover {
 QPushButton#navBtn {
     background: transparent;
     border: none;
-    border-radius: 12px;
+    border-radius: 8px;
     text-align: left;
-    padding: 11px 14px;
-    color: #e6dccf;
-    font-size: 12pt;
+    padding: 8px 12px;
+    color: #f7f1e8;
+    font-size: 13pt;
 }
 
 QPushButton#navBtn:hover {
-    background: #2a241e;
+    background: #2c261f;
+    color: #fffaf3;
 }
 
 QPushButton#navBtn:checked {
-    background: #3a2e1c;
-    color: #f8ebcf;
+    background: #4a3b24;
+    color: #fff6e4;
 }
 
 QToolButton#playButton {
@@ -179,6 +250,25 @@ QToolButton#transportBtn:hover {
 
 QToolButton#transportBtn:checked {
     background: #3a2e1c;
+}
+
+QToolButton#kidsBtn {
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+    padding: 6px 8px;
+    min-width: 44px;
+    min-height: 36px;
+    color: #f3eee6;
+}
+
+QToolButton#kidsBtn:hover {
+    background: #2e2822;
+}
+
+QToolButton#kidsBtn:checked {
+    background: #3a2e1c;
+    color: #e4b15a;
 }
 
 QToolButton#artButton {
@@ -409,4 +499,35 @@ QGroupBox::title {
 
 QSplitter::handle {
     background: #2e2822;
+}
+
+QWidget#playRail {
+    background: #12100e;
+    border-left: 1px solid #3a322a;
+}
+
+QLabel#playRailTitle {
+    background: #12100e;
+    color: #f6e7c8;
+    font-size: 14pt;
+    font-weight: 600;
+    padding: 16px 16px 8px 16px;
+}
+
+QListWidget#playList {
+    background: #12100e;
+    color: #f7f1e8;
+    font-size: 13pt;
+    outline: none;
+}
+
+QListWidget#playList::item {
+    color: #f7f1e8;
+    padding: 8px 16px;
+    border: none;
+}
+
+QListWidget#playList::item:selected {
+    background: #3a2e1c;
+    color: #e4b15a;
 }

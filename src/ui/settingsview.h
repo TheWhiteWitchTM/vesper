@@ -21,6 +21,11 @@ signals:
     void refetchRequested();
     void organizeRequested();
     void aboutRequested();
+    void kidsChanged(bool on);
+    void identifyRequested();
+
+public:
+    void setKidsChecked(bool on);
 
 private:
     Library *library_ = nullptr;
@@ -29,4 +34,6 @@ private:
     class QListWidget *folders_ = nullptr;
     class QComboBox *devices_ = nullptr;
     class QLineEdit *skipEdit_ = nullptr;
+    class QCheckBox *kidsBox_ = nullptr;
+    class QLabel *identifyNote_ = nullptr;
 };

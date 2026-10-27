@@ -15,11 +15,15 @@ public:
     void setFavorite(bool on);
     void setSleepText(const QString &text);
     void refresh();
+    void setKidsMode(bool on);
+    void setShuffleContext(const QString &kind);
 
 signals:
     void openCurrent();
     void moreRequested(const QPoint &globalPos);
     void favoriteToggled();
+    void shuffleRequested(bool on);
+    void kidsRequested(bool on);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -42,6 +46,7 @@ private:
     QLabel *volumeLabel_ = nullptr;
     QToolButton *playButton_ = nullptr;
     QToolButton *shuffleButton_ = nullptr;
+    QToolButton *kidsButton_ = nullptr;
     QToolButton *repeatButton_ = nullptr;
     QToolButton *heartButton_ = nullptr;
     QToolButton *muteButton_ = nullptr;

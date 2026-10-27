@@ -51,7 +51,7 @@ int TrackModel::rowCount(const QModelIndex &parent) const
 
 int TrackModel::columnCount(const QModelIndex &parent) const
 {
-    return parent.isValid() ? 0 : 7;
+    return parent.isValid() ? 0 : 8;
 }
 
 QVariant TrackModel::data(const QModelIndex &index, int role) const
@@ -67,6 +67,14 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
         return QColor(QStringLiteral("#e4b15a"));
     if (role == Qt::ForegroundRole && index.column() == 6 && track.favorite)
         return QColor(QStringLiteral("#e4b15a"));
+    if (role == Qt::ForegroundRole && index.column() == 7) {
+        if (track.content == QLatin1String("R"))
+            return QColor(QStringLiteral("#d27a6a"));
+        if (track.content == QLatin1String("PG"))
+            return QColor(QStringLiteral("#e4b15a"));
+        if (track.content == QLatin1String("G"))
+            return QColor(QStringLiteral("#8fbf8f"));
+    }
 
     if (role == Qt::UserRole) {
         switch (index.column()) {
@@ -77,6 +85,7 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
         case 4: return track.displayAlbum().toLower();
         case 5: return track.durationMs;
         case 6: return track.favorite ? 0 : 1;
+        case 7: return track.content;
         default: break;
         }
     }
@@ -90,6 +99,7 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
     case 4: return track.isVideo() ? track.genre : track.displayAlbum();
     case 5: return track.durationMs > 0 ? formatTime(track.durationMs) : QStringLiteral("—");
     case 6: return track.favorite ? QStringLiteral("♥") : QStringLiteral("♡");
+    case 7: return track.content;
     default: break;
     }
     return {};
@@ -107,6 +117,7 @@ QVariant TrackModel::headerData(int section, Qt::Orientation orientation, int ro
     case 4: return QStringLiteral("Album");
     case 5: return QStringLiteral("Time");
     case 6: return QString();
+    case 7: return QStringLiteral("Label");
     default: break;
     }
     return {};
@@ -116,7 +127,7 @@ TrackProxy::TrackProxy(QObject *parent)
     : QSortFilterProxyModel(parent)
 {
     setSortCaseSensitivity(Qt::CaseInsensitive);
-    setDynamicSortFilter(true);
+    setDynamicSortFilter(false);
 }
 
 bool TrackProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
@@ -197,7 +208,21 @@ QVariant VideoModel::data(const QModelIndex &index, int role) const
     case CoverRoles::Subtitle: return track.overview.isEmpty() ? track.genre : track.overview.left(90);
     case CoverRoles::ArtPath: return track.artwork;
     case CoverRoles::Key: return track.path;
-    case CoverRoles::Badge: return track.durationMs > 0 ? formatTime(track.durationMs) : QString();
+    case CoverRoles::Badge: {
+        QString badge = track.content;
+        if (track.durationMs > 0) {
+            if (!badge.isEmpty())
+                badge += QStringLiteral(" · ");
+            badge += formatTime(track.durationMs);
+        }
+        if (track.episode > 0) {
+            const QString mark = QStringLiteral("S%1E%2")
+                                     .arg(qMax(0, track.season), 2, 10, QChar('0'))
+                                     .arg(track.episode, 2, 10, QChar('0'));
+            badge = badge.isEmpty() ? mark : mark + QStringLiteral(" · ") + badge;
+        }
+        return badge;
+    }
     case CoverRoles::Progress: return progress;
     case CoverRoles::TrackRole: return QVariant::fromValue(track);
     case Qt::ToolTipRole: return track.displayTitle();

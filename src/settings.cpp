@@ -6,10 +6,15 @@ Settings::Settings(QObject *parent)
     : QObject(parent)
     , settings_(QStringLiteral("vesper"), QStringLiteral("vesper"))
 {
-    // Older builds stored a 0–100 volume, and 100 was still too quiet on this machine.
-    if (!settings_.value(QStringLiteral("volume199"), false).toBool()) {
-        settings_.setValue(QStringLiteral("volume"), kVolumeDefault);
+    // 199 was a forced loud default. Drop that once, then keep whatever is chosen.
+    if (!settings_.value(QStringLiteral("volume90"), false).toBool()) {
+        const bool hadVolume = settings_.contains(QStringLiteral("volume"));
+        const int current = settings_.value(QStringLiteral("volume"), kVolumeDefault).toInt();
+        if (!hadVolume || current >= 190)
+            settings_.setValue(QStringLiteral("volume"), kVolumeDefault);
+        settings_.setValue(QStringLiteral("volume90"), true);
         settings_.setValue(QStringLiteral("volume199"), true);
+        settings_.sync();
     }
 }
 
@@ -20,6 +25,7 @@ int Settings::volume() const
 void Settings::setVolume(int volume)
 {
     settings_.setValue(QStringLiteral("volume"), qBound(0, volume, kVolumeMax));
+    settings_.sync();
     emit changed();
 }
 
@@ -107,3 +113,33 @@ void Settings::setQueueIndex(int index) { settings_.setValue(QStringLiteral("que
 
 QString Settings::organizeDir() const { return settings_.value(QStringLiteral("organizeDir")).toString(); }
 void Settings::setOrganizeDir(const QString &dir) { settings_.setValue(QStringLiteral("organizeDir"), dir); }
+
+bool Settings::kidsMode() const { return settings_.value(QStringLiteral("kidsMode"), false).toBool(); }
+void Settings::setKidsMode(bool on)
+{
+    settings_.setValue(QStringLiteral("kidsMode"), on);
+    settings_.sync();
+    emit changed();
+}
+
+bool Settings::identifyEnabled() const { return settings_.value(QStringLiteral("identifyIds"), true).toBool(); }
+void Settings::setIdentifyEnabled(bool on)
+{
+    settings_.setValue(QStringLiteral("identifyIds"), on);
+    settings_.sync();
+    emit changed();
+}
+
+QString Settings::identifyDay() const { return settings_.value(QStringLiteral("identifyDay")).toString(); }
+void Settings::setIdentifyDay(const QString &day)
+{
+    settings_.setValue(QStringLiteral("identifyDay"), day);
+    settings_.sync();
+}
+
+QString Settings::identifyNote() const { return settings_.value(QStringLiteral("identifyNote")).toString(); }
+void Settings::setIdentifyNote(const QString &note)
+{
+    settings_.setValue(QStringLiteral("identifyNote"), note);
+    settings_.sync();
+}

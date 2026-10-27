@@ -30,12 +30,14 @@ PlaylistView::PlaylistView(Library *library, QWidget *parent)
     table_->setAlternatingRowColors(true);
     table_->setShowGrid(false);
     table_->verticalHeader()->hide();
+    table_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     table_->verticalHeader()->setDefaultSectionSize(36);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     table_->setColumnWidth(0, 36);
     table_->setColumnWidth(1, 46);
     table_->setColumnWidth(5, 72);
     table_->setColumnWidth(6, 46);
+    table_->setColumnWidth(7, 64);
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
     table_->setSortingEnabled(true);
 

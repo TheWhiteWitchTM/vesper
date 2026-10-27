@@ -207,6 +207,16 @@ Track readTrackTags(const QString &path, const QString &artworkDirectory)
                 track.lyrics = prop(map, "LYRICS");
             if (track.lyrics.isEmpty())
                 track.lyrics = prop(map, "UNSYNCEDLYRICS");
+            track.showName = prop(map, "SHOW");
+            if (track.showName.isEmpty())
+                track.showName = prop(map, "TVSHOW");
+            track.season = leadingInt(prop(map, "SEASONNUMBER"));
+            if (track.season == 0)
+                track.season = leadingInt(prop(map, "SEASON"));
+            track.episode = leadingInt(prop(map, "EPISODENUMBER"));
+            if (track.episode == 0)
+                track.episode = leadingInt(prop(map, "EPISODE"));
+            track.content = normalizeContent(prop(map, "CONTENTRATING"));
         }
     }
 
@@ -239,4 +249,59 @@ Track readTrackTags(const QString &path, const QString &artworkDirectory)
         track.artwork = saveArt(art, key, artworkDirectory);
     }
     return track;
+}
+
+namespace {
+
+TagLib::String toTag(const QString &text)
+{
+    const QByteArray utf = text.toUtf8();
+    return TagLib::String(utf.constData(), TagLib::String::UTF8);
+}
+
+} // namespace
+
+bool writeTrackTags(const Track &track, QString *error)
+{
+    if (track.path.isEmpty() || isStreamUrl(track.path)) {
+        if (error)
+            *error = QStringLiteral("There is no file to tag.");
+        return false;
+    }
+    const QByteArray encoded = QFile::encodeName(track.path);
+    TagLib::FileRef ref(encoded.constData(), false);
+    if (ref.isNull() || !ref.file() || !ref.tag()) {
+        if (error)
+            *error = QStringLiteral("Tags could not be written to this file.");
+        return false;
+    }
+    ref.tag()->setTitle(toTag(track.title));
+    ref.tag()->setArtist(toTag(track.artist));
+    ref.tag()->setAlbum(toTag(track.album));
+    ref.tag()->setGenre(toTag(track.genre));
+    ref.tag()->setYear(track.year > 0 ? static_cast<unsigned int>(track.year) : 0);
+    ref.tag()->setTrack(track.trackNo > 0 ? static_cast<unsigned int>(track.trackNo) : 0);
+
+    TagLib::PropertyMap map = ref.file()->properties();
+    auto put = [&](const char *key, const QString &value) {
+        const TagLib::String name(key);
+        if (value.trimmed().isEmpty())
+            map.erase(name);
+        else
+            map.replace(name, TagLib::StringList(toTag(value.trimmed())));
+    };
+    put("ALBUMARTIST", track.albumArtist);
+    put("DISCNUMBER", track.discNo > 0 ? QString::number(track.discNo) : QString());
+    put("SHOW", track.showName);
+    put("TVSHOW", track.showName);
+    put("SEASONNUMBER", track.season > 0 ? QString::number(track.season) : QString());
+    put("EPISODENUMBER", track.episode > 0 ? QString::number(track.episode) : QString());
+    put("CONTENTRATING", normalizeContent(track.content));
+    ref.file()->setProperties(map);
+    if (!ref.save()) {
+        if (error)
+            *error = QStringLiteral("Tags could not be saved.");
+        return false;
+    }
+    return true;
 }

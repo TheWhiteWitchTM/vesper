@@ -37,6 +37,12 @@ struct Track {
     int height = 0;
     qint64 dateAdded = 0;
     bool metaTried = false;
+    QString content; // G, PG, R, or empty
+    QString showName;
+    int season = 0;
+    int episode = 0;
+    int idLookup = 0;
+    qint64 idLookupAt = 0;
 
     QString displayTitle() const;
     QString displayArtist() const;
@@ -82,7 +88,21 @@ Q_DECLARE_METATYPE(QList<Track>)
 
 // libVLC percent. 100 is unity. 200 is the loud end of the scale.
 constexpr int kVolumeMax = 200;
-constexpr int kVolumeDefault = 199;
+constexpr int kVolumeDefault = 90;
+
+struct SeriesName {
+    QString show;
+    QString title;
+    int season = 0;
+    int episode = 0;
+};
+
+SeriesName seriesFromBaseName(const QString &fileBaseName);
+void applySeriesFromFileName(Track &track);
+bool pathIsPrivate(const QString &path);
+QString normalizeContent(const QString &label);
+QString safeFileComponent(const QString &text);
+QString mediaBaseName(const Track &track);
 
 QString formatTime(qint64 ms);
 bool isAudioExt(const QString &ext);
@@ -94,6 +114,7 @@ QString cleanDirPath(const QString &path);
 
 QString dataDir();
 QString artworkDir();
+QString singleInstanceName();
 QString vlcPluginDir();
 void preloadVlcCompanionLibs(const QString &pluginDir);
 int countPluginModules(const QString &pluginDir);

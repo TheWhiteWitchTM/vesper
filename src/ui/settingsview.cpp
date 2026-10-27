@@ -6,11 +6,13 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSlider>
 #include <QVBoxLayout>
 
@@ -47,6 +49,26 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     gain->setChecked(settings_->replayGain());
     auto *startup = new QCheckBox(QStringLiteral("Rescan library folders when Vesper opens"));
     startup->setChecked(settings_->scanAtStartup());
+    kidsBox_ = new QCheckBox(QStringLiteral("Kids are here — shuffle plays only G"));
+    kidsBox_->setChecked(settings_->kidsMode());
+    auto *kidsNote = new QLabel(QStringLiteral(
+        "Label a file G, PG, or R from its menu, or click the Label column on Songs. "
+        "Anything imported from a folder named private is R. Unlabeled files stay out of that shuffle."));
+    kidsNote->setObjectName(QStringLiteral("muted"));
+    kidsNote->setWordWrap(true);
+    auto *identifyBox = new QCheckBox(QStringLiteral("Ask Grok to name one id-only file or series a day"));
+    identifyBox->setChecked(settings_->identifyEnabled());
+    auto *identifyNow = new QPushButton(QStringLiteral("Identify one now"));
+    identifyNote_ = new QLabel(settings_->identifyNote());
+    identifyNote_->setObjectName(QStringLiteral("muted"));
+    identifyNote_->setWordWrap(true);
+    auto *organizeNote = new QLabel(QStringLiteral(
+        "Organize names files into Music / Artist / Album, Movies / Title (Year), "
+        "and Shows / Show / Season. Right-click a file, or the one that is playing, "
+        "to rename it and write the tags. A season folder of id-named episodes is numbered "
+        "from the show name without a lookup."));
+    organizeNote->setObjectName(QStringLiteral("muted"));
+    organizeNote->setWordWrap(true);
 
     devices_ = new QComboBox;
     auto *eq = new QPushButton(QStringLiteral("Equalizer"));
@@ -77,12 +99,17 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     auto *blurb = new QLabel(QStringLiteral(
         "Vesper uses libVLC for playback. Artwork comes from the file, then iTunes Search, "
         "MusicBrainz, and the Cover Art Archive. Lyrics come from LRCLIB. "
-        "Video summaries come from iTunes and Wikipedia. Nothing is written back into your files. "
+        "Video summaries come from iTunes and Wikipedia. Artwork lookup leaves the file alone. "
+        "Rename and Edit details write tags and can rename the file. "
         "Vesper is released under the MIT license."));
     blurb->setWordWrap(true);
     blurb->setObjectName(QStringLiteral("muted"));
 
-    auto *layout = new QVBoxLayout(this);
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    auto *inner = new QWidget;
+    auto *layout = new QVBoxLayout(inner);
     layout->setContentsMargins(28, 22, 28, 22);
     layout->setSpacing(10);
     layout->addWidget(title);
@@ -94,12 +121,26 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     layout->addWidget(restore);
     layout->addWidget(gain);
     layout->addWidget(startup);
+    layout->addSpacing(8);
+    layout->addWidget(new QLabel(QStringLiteral("When kids are here")));
+    layout->addWidget(kidsBox_);
+    layout->addWidget(kidsNote);
+    layout->addSpacing(8);
+    layout->addWidget(new QLabel(QStringLiteral("Library")));
+    layout->addWidget(organizeNote);
+    layout->addWidget(identifyBox);
+    auto *identifyRow = new QHBoxLayout;
+    identifyRow->addWidget(identifyNow);
+    identifyRow->addStretch();
+    layout->addLayout(identifyRow);
+    layout->addWidget(identifyNote_);
+    layout->addSpacing(8);
     layout->addWidget(new QLabel(QStringLiteral("Volume")));
     auto *volumeRow = new QHBoxLayout;
     volumeRow->addWidget(volume, 1);
     volumeRow->addWidget(volumeText);
     layout->addLayout(volumeRow);
-    layout->addWidget(new QLabel(QStringLiteral("100% is normal. It starts at 199% because 100% was too quiet.")));
+    layout->addWidget(new QLabel(QStringLiteral("100% is normal. It starts at 90% and remembers the level you leave it on.")));
     layout->addWidget(new QLabel(QStringLiteral("Audio device")));
     layout->addWidget(devices_);
     auto *tools = new QHBoxLayout;
@@ -116,6 +157,10 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     layout->addWidget(keys);
     layout->addWidget(blurb);
     layout->addStretch();
+    scroll->setWidget(inner);
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->addWidget(scroll);
 
     connect(add, &QPushButton::clicked, this, &SettingsView::addFolder);
     connect(rescan, &QPushButton::clicked, this, &SettingsView::rescan);
@@ -153,6 +198,12 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
         player_->setReplayGain(on);
     });
     connect(startup, &QCheckBox::toggled, settings_, &Settings::setScanAtStartup);
+    connect(kidsBox_, &QCheckBox::toggled, this, [this](bool on) {
+        settings_->setKidsMode(on);
+        emit kidsChanged(on);
+    });
+    connect(identifyBox, &QCheckBox::toggled, settings_, &Settings::setIdentifyEnabled);
+    connect(identifyNow, &QPushButton::clicked, this, &SettingsView::identifyRequested);
     connect(devices_, &QComboBox::currentIndexChanged, this, [this](int) {
         settings_->setAudioDevice(devices_->currentData().toString());
         player_->setAudioDevice(devices_->currentData().toString());
@@ -191,4 +242,20 @@ void SettingsView::reload()
     const int found = devices_->findData(current);
     devices_->setCurrentIndex(found >= 0 ? found : 0);
     devices_->blockSignals(false);
+    if (kidsBox_) {
+        kidsBox_->blockSignals(true);
+        kidsBox_->setChecked(settings_->kidsMode());
+        kidsBox_->blockSignals(false);
+    }
+    if (identifyNote_)
+        identifyNote_->setText(settings_->identifyNote());
+}
+
+void SettingsView::setKidsChecked(bool on)
+{
+    if (!kidsBox_)
+        return;
+    kidsBox_->blockSignals(true);
+    kidsBox_->setChecked(on);
+    kidsBox_->blockSignals(false);
 }

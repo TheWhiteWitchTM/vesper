@@ -20,6 +20,13 @@ QString Track::displayTitle() const
     }
     if (isStreamUrl(path))
         return path;
+    if (!showName.trimmed().isEmpty() && (season > 0 || episode > 0)
+        && (text.isEmpty() || nameIsCrypticId(text))) {
+        return QStringLiteral("%1 · S%2E%3")
+            .arg(showName.trimmed())
+            .arg(qMax(0, season), 2, 10, QChar('0'))
+            .arg(qMax(0, episode), 2, 10, QChar('0'));
+    }
     if (crypticFile) {
         if (durationMs > 0)
             return QStringLiteral("Untitled · %1").arg(formatTime(durationMs));
@@ -181,6 +188,14 @@ QString cleanDirPath(const QString &path)
     return p;
 }
 
+QString singleInstanceName()
+{
+    const QString name = qEnvironmentVariable("VESPER_INSTANCE");
+    if (name.isEmpty())
+        return QStringLiteral("vesper-player");
+    return QStringLiteral("vesper-player-") + name;
+}
+
 QString dataDir()
 {
     const QString env = qEnvironmentVariable("VESPER_DATA_DIR");
@@ -266,6 +281,141 @@ QStringList defaultSkipNames()
         "tmp", "usr", "bin", "sbin", "lib", "lib64", "opt", "etc",
         "boot", "var", "root", "srv", "third_party"
     };
+}
+
+bool pathIsPrivate(const QString &path)
+{
+    const QStringList parts = QDir::fromNativeSeparators(path).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        if (part.compare(QLatin1String("private"), Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+}
+
+QString normalizeContent(const QString &label)
+{
+    const QString text = label.trimmed().toUpper();
+    if (text.isEmpty())
+        return {};
+    if (text == QLatin1String("G") || text == QLatin1String("TV-G") || text == QLatin1String("TV-Y")
+        || text == QLatin1String("U"))
+        return QStringLiteral("G");
+    if (text == QLatin1String("PG") || text == QLatin1String("PG-13") || text == QLatin1String("PG13")
+        || text == QLatin1String("TV-PG") || text == QLatin1String("TV-14"))
+        return QStringLiteral("PG");
+    if (text == QLatin1String("R") || text == QLatin1String("NC-17") || text == QLatin1String("NC17")
+        || text == QLatin1String("TV-MA") || text == QLatin1String("X") || text == QLatin1String("XXX")
+        || text == QLatin1String("ADULT"))
+        return QStringLiteral("R");
+    return {};
+}
+
+QString safeFileComponent(const QString &text)
+{
+    QString clean = text;
+    clean.replace(QChar(0xFF1A), QStringLiteral(" - "));
+    clean.replace(QLatin1Char(':'), QStringLiteral(" - "));
+    clean.replace(QLatin1Char('\\'), QLatin1Char(' '));
+    clean.replace(QLatin1Char('/'), QLatin1Char(' '));
+    clean.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    clean.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    clean.replace(QRegularExpression(QStringLiteral("[*?\"<>|]")), QStringLiteral(" "));
+    clean.replace(QRegularExpression(QStringLiteral("\\s+")), QStringLiteral(" "));
+    clean = clean.trimmed();
+    while (clean.endsWith(QLatin1Char('.')) || clean.endsWith(QLatin1Char(' ')))
+        clean.chop(1);
+    if (clean.isEmpty() || clean == QLatin1String(".") || clean == QLatin1String(".."))
+        return {};
+    if (clean.size() > 140)
+        clean = clean.left(140).trimmed();
+    return clean;
+}
+
+SeriesName seriesFromBaseName(const QString &fileBaseName)
+{
+    SeriesName out;
+    QString base = fileBaseName.trimmed();
+    base.remove(QRegularExpression(QStringLiteral("\\s*\\(\\d\\)\\s*$")));
+    if (base.isEmpty() || nameIsCrypticId(base))
+        return out;
+    static const QRegularExpression seasonEp(
+        QStringLiteral("(?i)(?:^|[\\s._-])S(\\d{1,2})[\\s._-]*E(\\d{1,2})"));
+    static const QRegularExpression cross(
+        QStringLiteral("(?i)(?:^|[\\s._-])(\\d{1,2})x(\\d{2})(?:$|[\\s._-])"));
+    const QRegularExpressionMatch se = seasonEp.match(base);
+    const QRegularExpressionMatch cx = cross.match(base);
+    if (!se.hasMatch() && !cx.hasMatch())
+        return out;
+    const QRegularExpressionMatch hit = se.hasMatch() ? se : cx;
+    out.season = hit.captured(1).toInt();
+    out.episode = hit.captured(2).toInt();
+    out.show = cleanMediaTitle(base.left(hit.capturedStart()));
+    QString rawTitle = base.mid(hit.capturedEnd());
+    rawTitle.remove(QRegularExpression(QStringLiteral("^[\\s._-]+")));
+    rawTitle.remove(QRegularExpression(QStringLiteral("[\\s._-]+$")));
+    QString titleCheck = rawTitle;
+    titleCheck.replace(QLatin1Char('.'), QLatin1Char(' '));
+    titleCheck.replace(QRegularExpression(
+                           QStringLiteral("(?i)\\b(1080p|720p|2160p|480p|4k|x264|x265|h\\.?264|h\\.?265|"
+                                          "bluray|webrip|web-dl|webdl|hdrip)\\b")),
+                       QStringLiteral(" "));
+    out.title = titleCheck.trimmed().isEmpty() ? QString() : cleanMediaTitle(rawTitle);
+    static const QRegularExpression onlyJunk(
+        QStringLiteral("(?i)^(1080p|720p|2160p|480p|4k|x264|x265|bluray|webrip|web-dl|hdrip)$"));
+    if (onlyJunk.match(out.title).hasMatch() || out.title.compare(out.show, Qt::CaseInsensitive) == 0)
+        out.title.clear();
+    if (out.show.isEmpty())
+        out.show = out.title;
+    if (out.show.compare(out.title, Qt::CaseInsensitive) == 0)
+        out.title.clear();
+    return out;
+}
+
+void applySeriesFromFileName(Track &track)
+{
+    if (track.path.isEmpty() || isStreamUrl(track.path))
+        return;
+    const SeriesName parsed = seriesFromBaseName(QFileInfo(track.path).completeBaseName());
+    if (parsed.show.isEmpty() && parsed.season == 0 && parsed.episode == 0)
+        return;
+    if (track.showName.trimmed().isEmpty())
+        track.showName = parsed.show;
+    if (track.season == 0)
+        track.season = parsed.season;
+    if (track.episode == 0)
+        track.episode = parsed.episode;
+    if (track.title.trimmed().isEmpty() && !parsed.title.isEmpty())
+        track.title = parsed.title;
+}
+
+QString mediaBaseName(const Track &track)
+{
+    const QString show = track.showName.trimmed();
+    const QString title = track.title.trimmed();
+    QString name;
+    if (track.isVideo() && !show.isEmpty() && (track.season > 0 || track.episode > 0)) {
+        name = QStringLiteral("%1 - S%2E%3")
+                   .arg(show)
+                   .arg(qMax(0, track.season), 2, 10, QChar('0'))
+                   .arg(qMax(0, track.episode), 2, 10, QChar('0'));
+        if (!title.isEmpty() && title.compare(show, Qt::CaseInsensitive) != 0
+            && !title.startsWith(show + QStringLiteral(" ·"), Qt::CaseInsensitive)
+            && !title.startsWith(show + QStringLiteral(" -"), Qt::CaseInsensitive))
+            name += QStringLiteral(" - ") + title;
+    } else if (track.isVideo() && !title.isEmpty() && track.year >= 1900) {
+        name = QStringLiteral("%1 (%2)").arg(title).arg(track.year);
+    } else if (!title.isEmpty() && track.trackNo > 0) {
+        name = QStringLiteral("%1 - %2").arg(track.trackNo, 2, 10, QChar('0')).arg(title);
+    } else if (!track.isVideo() && !track.artist.trimmed().isEmpty() && !title.isEmpty()) {
+        name = track.artist.trimmed() + QStringLiteral(" - ") + title;
+    } else if (!title.isEmpty()) {
+        name = title;
+    }
+    name = safeFileComponent(name);
+    if (name.isEmpty() || nameIsCrypticId(name) || name.compare(QLatin1String("Untitled"), Qt::CaseInsensitive) == 0)
+        return {};
+    return name;
 }
 
 QString likePattern(const QString &text)

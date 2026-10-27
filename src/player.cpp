@@ -572,6 +572,30 @@ void Player::retargetPath(const QString &from, const QString &to)
         emit queueChanged();
 }
 
+void Player::noteQueued(const Track &track)
+{
+    if (track.path.isEmpty() && track.id <= 0)
+        return;
+    bool changed = false;
+    for (int i = 0; i < queue_.size(); ++i) {
+        Track &row = queue_[i];
+        const bool same = (track.id > 0 && row.id == track.id)
+                          || (!track.path.isEmpty() && row.path == track.path);
+        if (!same)
+            continue;
+        row = track;
+        changed = true;
+    }
+    if (!changed)
+        return;
+    emit queueChanged();
+    const Track playing = current();
+    const bool currentHit = (track.id > 0 && playing.id == track.id)
+                            || (!track.path.isEmpty() && !playing.path.isEmpty() && playing.path == track.path);
+    if (currentHit)
+        emit trackMetaChanged(current());
+}
+
 void Player::setMuted(bool muted)
 {
     muted_ = muted;

@@ -29,11 +29,31 @@ signals:
     void appendTracks(const QList<Track> &tracks);
     void playNext(const QList<Track> &tracks);
     void contextTracks(const QList<Track> &tracks, const QPoint &globalPos);
+    void shuffleRequested();
 
 private:
     void showTracks(const QList<Track> &tracks, const QString &heading, bool albumMode);
     void openAlbum(const QString &artist, const QString &album);
     void wireTable(QTableView *table);
+    void ensureSection(int page);
+    void rebuildBrowser();
+    const QList<Track> &audioTracks();
+
+    QString genrePick_;
+    QString artistPick_;
+    QString albumPick_;
+    QString labelPick_;
+    bool albumsReady_ = false;
+    bool artistsReady_ = false;
+    bool songsReady_ = false;
+    bool genresReady_ = false;
+    bool audioReady_ = false;
+    QList<Track> audioCache_;
+    class QListView *albumGrid_ = nullptr;
+    class QListWidget *genreBrowser_ = nullptr;
+    class QListWidget *artistBrowser_ = nullptr;
+    class QListWidget *albumBrowser_ = nullptr;
+    class QComboBox *labelFilter_ = nullptr;
 
     Library *library_ = nullptr;
     QStackedWidget *stack_ = nullptr;

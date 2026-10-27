@@ -27,7 +27,10 @@ HomeView::HomeView(Library *library, QWidget *parent)
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->addWidget(scroll);
-    connect(ArtLoader::instance(), &ArtLoader::ready, this, [this] { reload(); });
+    connect(ArtLoader::instance(), &ArtLoader::ready, this, [this] {
+        if (isVisible())
+            refreshArt();
+    });
 }
 
 QWidget *HomeView::welcome() const
@@ -85,9 +88,12 @@ void HomeView::addTrackRow(QVBoxLayout *layout, const QString &heading, const QL
         button->setIconSize(QSize(132, 132));
         button->setFixedSize(156, 196);
         button->setCursor(Qt::PointingHandCursor);
-        const QPixmap art = ArtLoader::instance()->image(
-            track.artwork, track.path, track.displayTitle(), QSize(132, 132), track.isVideo());
-        button->setIcon(QIcon(art));
+        button->setProperty("artPath", track.artwork);
+        button->setProperty("artKey", track.path);
+        button->setProperty("artTitle", track.displayTitle());
+        button->setProperty("artVideo", track.isVideo());
+        button->setIcon(QIcon(ArtLoader::instance()->image(
+            track.artwork, track.path, track.displayTitle(), QSize(132, 132), track.isVideo())));
         const QString caption = track.displayTitle();
         button->setText(caption.size() > 22 ? caption.left(20) + QStringLiteral("…") : caption);
         button->setToolTip(track.displayArtist().isEmpty()
@@ -136,20 +142,24 @@ void HomeView::reload()
                                    .arg(stats.video)
                                    .arg(formatTime(stats.durationMs)));
     summary->setObjectName(QStringLiteral("muted"));
+    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
+    shuffle->setObjectName(QStringLiteral("primary"));
     auto *organize = new QPushButton(QStringLiteral("Organize names"));
     auto *summaryRow = new QHBoxLayout;
     summaryRow->addWidget(summary, 1);
+    summaryRow->addWidget(shuffle);
     summaryRow->addWidget(organize);
     content_->addLayout(summaryRow);
+    connect(shuffle, &QPushButton::clicked, this, &HomeView::shuffleRequested);
     connect(organize, &QPushButton::clicked, this, &HomeView::organizeRequested);
 
     const QList<Track> watching = library_->continueWatching(12);
     addTrackRow(content_, QStringLiteral("Continue watching"), watching);
     addTrackRow(content_, QStringLiteral("Recently played"), library_->recentlyPlayed(14));
-    addTrackRow(content_, QStringLiteral("Favorites"), library_->favorites().mid(0, 14));
+    addTrackRow(content_, QStringLiteral("Favorites"), library_->favorites(14));
     addTrackRow(content_, QStringLiteral("Recently added"), library_->recentlyAdded(14));
 
-    const QList<Album> albums = library_->albums();
+    const QList<Album> albums = library_->albums(14);
     if (!albums.isEmpty()) {
         auto *label = new QLabel(QStringLiteral("Albums"));
         label->setObjectName(QStringLiteral("section"));
@@ -166,6 +176,10 @@ void HomeView::reload()
             button->setIconSize(QSize(132, 132));
             button->setFixedSize(156, 196);
             button->setCursor(Qt::PointingHandCursor);
+            button->setProperty("artPath", album.artwork);
+            button->setProperty("artKey", album.albumArtist + album.album);
+            button->setProperty("artTitle", album.album);
+            button->setProperty("artVideo", false);
             button->setIcon(QIcon(ArtLoader::instance()->image(
                 album.artwork, album.albumArtist + album.album, album.album, QSize(132, 132), false)));
             button->setText(album.album.size() > 22 ? album.album.left(20) + QStringLiteral("…") : album.album);
@@ -185,4 +199,22 @@ void HomeView::reload()
         content_->addWidget(scroller);
     }
     content_->addStretch();
+}
+
+void HomeView::refreshArt()
+{
+    if (!contentWidget_)
+        return;
+    const auto buttons = contentWidget_->findChildren<QToolButton *>();
+    for (QToolButton *button : buttons) {
+        const QString key = button->property("artKey").toString();
+        if (key.isEmpty() && button->property("artPath").toString().isEmpty())
+            continue;
+        button->setIcon(QIcon(ArtLoader::instance()->image(
+            button->property("artPath").toString(),
+            key,
+            button->property("artTitle").toString(),
+            QSize(132, 132),
+            button->property("artVideo").toBool())));
+    }
 }

@@ -14,6 +14,7 @@ class PlaylistView : public QWidget {
 public:
     explicit PlaylistView(Library *library, QWidget *parent = nullptr);
     void reload();
+    QList<Track> currentTracks() const;
 
 signals:
     void playTracks(const QList<Track> &tracks, int index);
@@ -21,7 +22,6 @@ signals:
 
 private:
     void showCurrent();
-    QList<Track> currentTracks() const;
 
     Library *library_ = nullptr;
     QListWidget *names_ = nullptr;

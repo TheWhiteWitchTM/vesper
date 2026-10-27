@@ -57,6 +57,15 @@ public:
     QString organizeDir() const;
     void setOrganizeDir(const QString &dir);
 
+    bool kidsMode() const;
+    void setKidsMode(bool on);
+    bool identifyEnabled() const;
+    void setIdentifyEnabled(bool on);
+    QString identifyDay() const;
+    void setIdentifyDay(const QString &day);
+    QString identifyNote() const;
+    void setIdentifyNote(const QString &note);
+
 signals:
     void changed();
 

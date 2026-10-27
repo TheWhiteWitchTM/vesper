@@ -1,6 +1,5 @@
 #include "artloader.h"
 
-#include <QFileInfo>
 #include <QImageReader>
 #include <QPainter>
 #include <QtConcurrent>
@@ -58,7 +57,7 @@ QPixmap ArtLoader::placeholder(const QString &key, const QString &title, const Q
 QPixmap ArtLoader::image(const QString &path, const QString &key, const QString &title,
                          const QSize &size, bool video)
 {
-    if (path.isEmpty() || !QFileInfo::exists(path))
+    if (path.isEmpty())
         return placeholder(key, title, size, video);
     const QString cacheKey = path + QStringLiteral("|") + QString::number(size.width())
         + QLatin1Char('x') + QString::number(size.height());
@@ -67,7 +66,7 @@ QPixmap ArtLoader::image(const QString &path, const QString &key, const QString 
     if (!inflight_.contains(cacheKey)) {
         inflight_.insert(cacheKey);
         const QSize box = size * 2;
-        (void)QtConcurrent::run([this, path, cacheKey, box] {
+        (void)QtConcurrent::run([this, path, cacheKey, box, key, title, size, video] {
             QImageReader reader(path);
             reader.setAutoTransform(true);
             const QSize source = reader.size();
@@ -77,13 +76,15 @@ QPixmap ArtLoader::image(const QString &path, const QString &key, const QString 
                     reader.setScaledSize(scaled);
             }
             const QImage image = reader.read();
-            QMetaObject::invokeMethod(this, [this, cacheKey, image] {
+            QMetaObject::invokeMethod(this, [this, cacheKey, image, key, title, size, video] {
                 inflight_.remove(cacheKey);
+                if (cache_.size() > 280)
+                    cache_.clear();
                 if (!image.isNull()) {
-                    if (cache_.size() > 280)
-                        cache_.clear();
                     cache_.insert(cacheKey, QPixmap::fromImage(image));
                     emit ready(cacheKey);
+                } else {
+                    cache_.insert(cacheKey, placeholder(key, title, size, video));
                 }
             }, Qt::QueuedConnection);
         });

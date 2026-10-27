@@ -30,6 +30,7 @@ SOURCES += \
     src/artloader.cpp \
     src/icons.cpp \
     src/organize.cpp \
+    src/identify.cpp \
     src/ui/trackmodel.cpp \
     src/ui/coverdelegate.cpp \
     src/ui/transport.cpp \
@@ -58,6 +59,7 @@ HEADERS += \
     src/artloader.h \
     src/icons.h \
     src/organize.h \
+    src/identify.h \
     src/ui/trackmodel.h \
     src/ui/coverdelegate.h \
     src/ui/transport.h \

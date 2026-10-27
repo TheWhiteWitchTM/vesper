@@ -8,6 +8,8 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 
+#include <atomic>
+
 class QTimer;
 
 class Library : public QObject {
@@ -27,7 +29,7 @@ public:
     QHash<QString, QPair<qint64, qint64>> knownFiles(qint64 folderId) const;
 
     QList<Track> tracks(const QString &kind) const;
-    QList<Album> albums() const;
+    QList<Album> albums(int limit = 0) const;
     QList<ArtistRow> artists() const;
     QList<GenreRow> genres() const;
     QList<Track> albumTracks(const QString &albumArtist, const QString &album) const;
@@ -36,7 +38,7 @@ public:
     QList<Track> search(const QString &text) const;
     QList<Track> recentlyPlayed(int limit) const;
     QList<Track> recentlyAdded(int limit) const;
-    QList<Track> favorites() const;
+    QList<Track> favorites(int limit = 0) const;
     QList<Track> mostPlayed(int limit) const;
     QList<Track> continueWatching(int limit) const;
     QList<Track> needsMetadata(int limit) const;
@@ -54,6 +56,8 @@ public:
     void setFavorite(qint64 id, bool on);
     void setRating(qint64 id, int rating);
     void updateEditable(const Track &track);
+    void setContent(qint64 id, const QString &label);
+    void setIdLookup(const QList<qint64> &ids, int state);
     void relocateTrack(const QString &from, const QString &to);
     void setMetaTried(qint64 id, bool tried);
     void resetMissingMetadata();
@@ -83,3 +87,9 @@ private:
     QString error_;
     QTimer *touchTimer_ = nullptr;
 };
+
+// Safe to call from the scanner thread on a connection that thread opened.
+bool writeTrackBatch(QSqlDatabase &db, const QList<Track> &tracks, QString *error);
+bool forgetMissingTracks(QSqlDatabase &db, qint64 folderId, const QStringList &seen,
+                         const std::atomic_bool *cancel);
+QHash<QString, QPair<qint64, qint64>> knownTrackFiles(const QSqlDatabase &db, qint64 folderId);

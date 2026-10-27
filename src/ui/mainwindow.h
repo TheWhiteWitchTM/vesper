@@ -6,13 +6,17 @@
 
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QLocalServer;
+class QProgressBar;
 class QPushButton;
+class QResizeEvent;
 class QStackedWidget;
 class QSystemTrayIcon;
 class QTableView;
 class QTimer;
 
+class ScanRing;
 class HomeView;
 class MusicView;
 class VideoView;
@@ -29,6 +33,7 @@ class Prober;
 class Scanner;
 class VideoWidget;
 class TrackModel;
+class IdNamer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -41,6 +46,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -69,9 +75,26 @@ private:
     void setChromeVisible(bool on);
     void pokeChrome();
     void showAbout();
+    void showHelp();
+    void showAboutDialog(int tab);
+    void supportDevelopment();
     void organizeMedia(const QString &startDir);
-    void setStatus(const QString &text);
+    void shuffleLibrary();
+    QString shuffleKind() const;
+    QList<Track> shufflePool() const;
+    void labelTracks(const QList<Track> &tracks, const QString &label);
+    void setStatus(const QString &text, bool busy = false);
+    void showIdleStatus();
+    bool videoSurface() const;
+    void showPlayRail();
+    void hidePlayRail();
+    void hidePlayRailSoon();
+    void syncPlayRail();
+    void placePlayRail();
     void reloadViews();
+    void schedulePageLoad(int page);
+    void showScan(int percent, const QString &detail);
+    void buildMenus();
     void runSearch();
     Track trackForPath(const QString &path) const;
     QString notifyIconPath();
@@ -90,6 +113,8 @@ private:
     QWidget *resumeBar_ = nullptr;
     QLabel *resumeLabel_ = nullptr;
     QLabel *status_ = nullptr;
+    ScanRing *scanRing_ = nullptr;
+    QProgressBar *busyBar_ = nullptr;
     QPushButton *cancelScan_ = nullptr;
     QLineEdit *search_ = nullptr;
     QStackedWidget *stack_ = nullptr;
@@ -98,6 +123,9 @@ private:
     class QVBoxLayout *dockLayout_ = nullptr;
     Transport *transport_ = nullptr;
     QList<QPushButton *> nav_;
+    QWidget *playRail_ = nullptr;
+    QListWidget *playList_ = nullptr;
+    QTimer *playRailTimer_ = nullptr;
 
     HomeView *home_ = nullptr;
     MusicView *music_ = nullptr;
@@ -106,6 +134,7 @@ private:
     QueueView *queuePage_ = nullptr;
     NowPlaying *now_ = nullptr;
     SettingsView *settingsView_ = nullptr;
+    IdNamer *namer_ = nullptr;
     QTableView *searchTable_ = nullptr;
     TrackModel *searchModel_ = nullptr;
 
@@ -115,6 +144,9 @@ private:
     QTimer *videoClickTimer_ = nullptr;
     QTimer *sleepTick_ = nullptr;
     QTimer *searchTimer_ = nullptr;
+    QTimer *viewReloadTimer_ = nullptr;
+    QTimer *scanSpin_ = nullptr;
+    int viewsDirty_ = 0xf;
     qint64 sleepLeftMs_ = 0;
 
     QSystemTrayIcon *tray_ = nullptr;

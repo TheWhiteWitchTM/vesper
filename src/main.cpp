@@ -1,5 +1,6 @@
 #include "common.h"
 #include "library.h"
+#include "identify.h"
 #include "organize.h"
 #include "mpris.h"
 #include "player.h"
@@ -69,7 +70,7 @@ void applyTheme(QApplication &app)
 bool handOff(const QStringList &paths)
 {
     QLocalSocket socket;
-    socket.connectToServer(QStringLiteral("vesper-player"));
+    socket.connectToServer(singleInstanceName());
     if (!socket.waitForConnected(300))
         return false;
     QStringList lines;
@@ -133,7 +134,13 @@ int runDumpScan(const QString &dir)
         std::fflush(stdout);
     });
     int found = 0;
-    QObject::connect(&scanner, &Scanner::progress, [&found](const QString &, int count) { found = count; });
+    QObject::connect(&scanner, &Scanner::progress, [&found](int, const QString &detail) {
+        const QString line = detail.section(QLatin1Char('\n'), 0, 0);
+        if (line.contains(QStringLiteral(" of ")))
+            found = line.section(QLatin1Char(' '), 4, 4).toInt();
+        else if (line.endsWith(QStringLiteral(" files")))
+            found = line.section(QLatin1Char(' '), 2, 2).toInt();
+    });
     bool cancelled = true;
     QEventLoop loop;
     QObject::connect(&scanner, qOverload<bool>(&Scanner::finished), &loop, [&](bool wasCancelled) {
@@ -259,8 +266,11 @@ int main(int argc, char *argv[])
     parser.addOption(organizeCheck);
     parser.process(app);
 
-    if (parser.isSet(organizeCheck))
-        return organizeSelfCheck();
+    if (parser.isSet(organizeCheck)) {
+        const int organized = organizeSelfCheck();
+        const int rules = rulesSelfCheck();
+        return organized != 0 ? organized : rules;
+    }
     if (parser.isSet(selfTest))
         return runSelfTest(parser.value(selfTest));
     if (parser.isSet(dumpScan))

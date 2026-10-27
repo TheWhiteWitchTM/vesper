@@ -21,9 +21,11 @@ signals:
     void scanHome();
     void scanComputer();
     void organizeRequested();
+    void shuffleRequested();
 
 private:
     void addTrackRow(QVBoxLayout *layout, const QString &heading, const QList<Track> &tracks);
+    void refreshArt();
     QWidget *welcome() const;
 
     Library *library_ = nullptr;

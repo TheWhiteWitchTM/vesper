@@ -50,6 +50,13 @@ Transport::Transport(Player *player, QWidget *parent)
     titles->addWidget(artistLabel_);
     titles->addStretch();
 
+    kidsButton_ = new QToolButton(this);
+    kidsButton_->setObjectName(QStringLiteral("kidsBtn"));
+    kidsButton_->setText(QStringLiteral("Kids"));
+    kidsButton_->setCheckable(true);
+    kidsButton_->setAutoRaise(true);
+    kidsButton_->setCursor(Qt::PointingHandCursor);
+    kidsButton_->setToolTip(QStringLiteral("When kids are here, shuffle plays only G"));
     shuffleButton_ = iconButton(Icons::shuffle(), QStringLiteral("Shuffle"), this);
     shuffleButton_->setCheckable(true);
     auto *prev = iconButton(Icons::previous(), QStringLiteral("Previous"), this);
@@ -65,6 +72,7 @@ Transport::Transport(Player *player, QWidget *parent)
 
     auto *controls = new QHBoxLayout;
     controls->setSpacing(4);
+    controls->addWidget(kidsButton_);
     controls->addWidget(shuffleButton_);
     controls->addWidget(prev);
     controls->addWidget(playButton_);
@@ -77,7 +85,7 @@ Transport::Transport(Player *player, QWidget *parent)
     volume_->setRange(0, kVolumeMax);
     volume_->setFixedWidth(110);
     volume_->setValue(player_->volume());
-    volume_->setToolTip(QStringLiteral("Volume. 100% is normal, 200% is as loud as VLC goes."));
+    volume_->setToolTip(QStringLiteral("Volume. Starts at 90% and stays where you leave it. 100% is normal."));
     volumeLabel_ = new QLabel(QStringLiteral("%1%").arg(player_->volume()), this);
     volumeLabel_->setObjectName(QStringLiteral("muted"));
     volumeLabel_->setMinimumWidth(44);
@@ -129,7 +137,8 @@ Transport::Transport(Player *player, QWidget *parent)
     connect(playButton_, &QToolButton::clicked, player_, &Player::toggle);
     connect(prev, &QToolButton::clicked, player_, &Player::previous);
     connect(next, &QToolButton::clicked, player_, &Player::next);
-    connect(shuffleButton_, &QToolButton::clicked, player_, &Player::setShuffle);
+    connect(shuffleButton_, &QToolButton::clicked, this, [this](bool on) { emit shuffleRequested(on); });
+    connect(kidsButton_, &QToolButton::clicked, this, [this](bool on) { emit kidsRequested(on); });
     connect(repeatButton_, &QToolButton::clicked, this, &Transport::toggleRepeat);
     connect(heartButton_, &QToolButton::clicked, this, &Transport::favoriteToggled);
     connect(muteButton_, &QToolButton::clicked, this, [this] { player_->setMuted(!player_->isMuted()); });
@@ -156,6 +165,7 @@ Transport::Transport(Player *player, QWidget *parent)
 
     connect(player_, &Player::stateChanged, this, [this] { syncState(); });
     connect(player_, &Player::trackChanged, this, [this] { syncTrack(); });
+    connect(player_, &Player::trackMetaChanged, this, [this] { syncTrack(); });
     connect(player_, &Player::positionChanged, this, &Transport::syncClock);
     connect(player_, &Player::volumeChanged, this, [this](int volume, bool) {
         volume_->blockSignals(true);
@@ -176,6 +186,29 @@ Transport::Transport(Player *player, QWidget *parent)
     connect(ArtLoader::instance(), &ArtLoader::ready, this, [this] { syncTrack(); });
     syncState();
     syncTrack();
+}
+
+void Transport::setKidsMode(bool on)
+{
+    kidsButton_->setChecked(on);
+    setShuffleContext({});
+}
+
+void Transport::setShuffleContext(const QString &kind)
+{
+    const bool kids = kidsButton_ && kidsButton_->isChecked();
+    if (kind == QLatin1String("audio")) {
+        shuffleButton_->setToolTip(kids ? QStringLiteral("Shuffle G-rated music")
+                                        : QStringLiteral("Shuffle music"));
+        return;
+    }
+    if (kind == QLatin1String("video")) {
+        shuffleButton_->setToolTip(kids ? QStringLiteral("Shuffle G-rated videos")
+                                        : QStringLiteral("Shuffle videos"));
+        return;
+    }
+    shuffleButton_->setToolTip(kids ? QStringLiteral("Shuffle G-rated files")
+                                    : QStringLiteral("Shuffle"));
 }
 
 void Transport::setFavorite(bool on)
