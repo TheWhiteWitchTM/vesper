@@ -51,6 +51,18 @@ void Settings::setReplayGain(bool on) { settings_.setValue(QStringLiteral("repla
 bool Settings::scanAtStartup() const { return settings_.value(QStringLiteral("scanAtStartup"), true).toBool(); }
 void Settings::setScanAtStartup(bool on) { settings_.setValue(QStringLiteral("scanAtStartup"), on); emit changed(); }
 
+bool Settings::playerFolded() const { return settings_.value(QStringLiteral("playerFolded"), false).toBool(); }
+void Settings::setPlayerFolded(bool on) { settings_.setValue(QStringLiteral("playerFolded"), on); emit changed(); }
+
+int Settings::dockHeight() const
+{
+    return qBound(96, settings_.value(QStringLiteral("dockHeight"), 188).toInt(), 720);
+}
+void Settings::setDockHeight(int px)
+{
+    settings_.setValue(QStringLiteral("dockHeight"), qBound(96, px, 720));
+}
+
 bool Settings::shuffle() const { return settings_.value(QStringLiteral("shuffle"), false).toBool(); }
 void Settings::setShuffle(bool on) { settings_.setValue(QStringLiteral("shuffle"), on); emit changed(); }
 
@@ -113,6 +125,68 @@ void Settings::setQueueIndex(int index) { settings_.setValue(QStringLiteral("que
 
 QString Settings::organizeDir() const { return settings_.value(QStringLiteral("organizeDir")).toString(); }
 void Settings::setOrganizeDir(const QString &dir) { settings_.setValue(QStringLiteral("organizeDir"), dir); }
+
+namespace {
+
+QList<QPair<QString, QString>> readPairs(const QSettings &settings, const QString &key)
+{
+    QList<QPair<QString, QString>> rows;
+    const QStringList stored = settings.value(key).toStringList();
+    for (const QString &row : stored) {
+        const int tab = row.indexOf(QLatin1Char('\t'));
+        if (tab <= 0)
+            continue;
+        const QString left = row.left(tab).trimmed();
+        const QString right = row.mid(tab + 1).trimmed();
+        if (left.isEmpty() || right.isEmpty())
+            continue;
+        rows.append({left, right});
+    }
+    return rows;
+}
+
+void writePairs(QSettings &settings, const QString &key, const QList<QPair<QString, QString>> &rows)
+{
+    QStringList stored;
+    stored.reserve(rows.size());
+    for (const auto &row : rows) {
+        QString left = row.first;
+        QString right = row.second;
+        left.replace(QLatin1Char('\t'), QLatin1Char(' '));
+        left.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        right.replace(QLatin1Char('\t'), QLatin1Char(' '));
+        right.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        left = left.trimmed();
+        right = right.trimmed();
+        if (left.isEmpty() || right.isEmpty())
+            continue;
+        stored.append(left + QLatin1Char('\t') + right);
+    }
+    settings.setValue(key, stored);
+    settings.sync();
+}
+
+} // namespace
+
+QList<QPair<QString, QString>> Settings::radioStations() const
+{
+    return readPairs(settings_, QStringLiteral("radio/stations"));
+}
+
+void Settings::setRadioStations(const QList<QPair<QString, QString>> &stations)
+{
+    writePairs(settings_, QStringLiteral("radio/stations"), stations);
+}
+
+QList<QPair<QString, QString>> Settings::youtubeChannels() const
+{
+    return readPairs(settings_, QStringLiteral("youtube/channels"));
+}
+
+void Settings::setYoutubeChannels(const QList<QPair<QString, QString>> &channels)
+{
+    writePairs(settings_, QStringLiteral("youtube/channels"), channels);
+}
 
 bool Settings::kidsMode() const { return settings_.value(QStringLiteral("kidsMode"), false).toBool(); }
 void Settings::setKidsMode(bool on)

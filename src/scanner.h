@@ -2,6 +2,7 @@
 
 #include "common.h"
 
+#include <QMutex>
 #include <QSet>
 #include <QThread>
 #include <atomic>
@@ -24,6 +25,17 @@ public:
                    const QStringList &skipNames,
                    const QString &databasePath = {});
     void requestCancel();
+
+    struct Progress {
+        int percent = -1;
+        int done = 0;
+        int total = 0;
+        qint64 startedMs = 0;
+        QString file;
+    };
+    // Latest sample from the worker. The window polls this so progress never
+    // queues widget work onto the UI thread.
+    Progress progressSnapshot() const;
 
 signals:
     void batchReady(const QList<Track> &tracks);
@@ -50,7 +62,7 @@ private:
                      QList<MediaFile> *files, QStringList *seen);
     bool ingestRoot(const Root &root, const QList<MediaFile> &files, class QSqlDatabase *db,
                     int *done, int total, QList<Track> *probe, bool *notedError);
-    void noteProgress(int percent, const QString &detail);
+    void noteProgress(int percent, int done, int total, const QString &filePath);
 
     QList<Root> roots_;
     QHash<QString, QPair<qint64, qint64>> known_;
@@ -59,5 +71,7 @@ private:
     QSet<QString> skip_;
     qint64 lastProgressMs_ = 0;
     int lastPercent_ = -2;
+    mutable QMutex progressMutex_;
+    Progress progress_;
     std::atomic_bool cancel_{false};
 };

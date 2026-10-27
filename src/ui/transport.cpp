@@ -4,8 +4,11 @@
 #include "icons.h"
 
 #include <QEvent>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QResizeEvent>
+#include <QSizePolicy>
 #include <QSlider>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -40,8 +43,12 @@ Transport::Transport(Player *player, QWidget *parent)
 
     titleLabel_ = new QLabel(QStringLiteral("Nothing playing"));
     titleLabel_->setObjectName(QStringLiteral("titleLabel"));
+    titleLabel_->setMinimumWidth(48);
+    titleLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     artistLabel_ = new QLabel(QStringLiteral("Choose something from your library, or drop a file here"));
     artistLabel_->setObjectName(QStringLiteral("artistLabel"));
+    artistLabel_->setMinimumWidth(48);
+    artistLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
     auto *titles = new QVBoxLayout;
     titles->setSpacing(0);
@@ -59,31 +66,47 @@ Transport::Transport(Player *player, QWidget *parent)
     kidsButton_->setToolTip(QStringLiteral("When kids are here, shuffle plays only G"));
     shuffleButton_ = iconButton(Icons::shuffle(), QStringLiteral("Shuffle"), this);
     shuffleButton_->setCheckable(true);
-    auto *prev = iconButton(Icons::previous(), QStringLiteral("Previous"), this);
-    playButton_ = new QToolButton(this);
+    // No layout inside this box. A stylesheet min-width plus a tight row used
+    // to place previous and next on top of the play circle.
+    cluster_ = new QWidget(this);
+    cluster_->setObjectName(QStringLiteral("transportCluster"));
+    cluster_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    prevButton_ = iconButton(Icons::previous(), QStringLiteral("Previous"), cluster_);
+    prevButton_->setFixedSize(40, 40);
+    prevButton_->setIconSize(QSize(18, 18));
+    playButton_ = new QToolButton(cluster_);
     playButton_->setObjectName(QStringLiteral("playButton"));
     playButton_->setIcon(Icons::play(QColor(QStringLiteral("#1a140c"))));
-    playButton_->setIconSize(QSize(26, 26));
+    playButton_->setIconSize(QSize(22, 22));
+    playButton_->setFixedSize(56, 56);
     playButton_->setToolTip(QStringLiteral("Play"));
     playButton_->setCursor(Qt::PointingHandCursor);
-    auto *next = iconButton(Icons::next(), QStringLiteral("Next"), this);
+    playButton_->setAutoRaise(false);
+    nextButton_ = iconButton(Icons::next(), QStringLiteral("Next"), cluster_);
+    nextButton_->setFixedSize(40, 40);
+    nextButton_->setIconSize(QSize(18, 18));
     repeatButton_ = iconButton(Icons::repeat(), QStringLiteral("Repeat"), this);
     repeatButton_->setCheckable(true);
+    repeatButton_->setFixedSize(40, 40);
+    shuffleButton_->setFixedSize(40, 40);
+    placeCluster();
 
     auto *controls = new QHBoxLayout;
     controls->setSpacing(4);
     controls->addWidget(kidsButton_);
     controls->addWidget(shuffleButton_);
-    controls->addWidget(prev);
-    controls->addWidget(playButton_);
-    controls->addWidget(next);
+    controls->addWidget(cluster_);
     controls->addWidget(repeatButton_);
 
     heartButton_ = iconButton(Icons::heart(false), QStringLiteral("Favorite"), this);
+    heartButton_->setFixedSize(36, 36);
     muteButton_ = iconButton(Icons::volume(), QStringLiteral("Mute"), this);
+    muteButton_->setFixedSize(36, 36);
     volume_ = new QSlider(Qt::Horizontal, this);
     volume_->setRange(0, kVolumeMax);
-    volume_->setFixedWidth(110);
+    volume_->setMinimumWidth(48);
+    volume_->setMaximumWidth(110);
+    volume_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     volume_->setValue(player_->volume());
     volume_->setToolTip(QStringLiteral("Volume. Starts at 90% and stays where you leave it. 100% is normal."));
     volumeLabel_ = new QLabel(QStringLiteral("%1%").arg(player_->volume()), this);
@@ -91,6 +114,7 @@ Transport::Transport(Player *player, QWidget *parent)
     volumeLabel_->setMinimumWidth(44);
     volumeLabel_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     moreButton_ = iconButton(Icons::equalizer(), QStringLiteral("More"), this);
+    moreButton_->setFixedSize(36, 36);
     sleepLabel_ = new QLabel(this);
     sleepLabel_->setObjectName(QStringLiteral("muted"));
 
@@ -135,8 +159,8 @@ Transport::Transport(Player *player, QWidget *parent)
     layout->addLayout(middle);
 
     connect(playButton_, &QToolButton::clicked, player_, &Player::toggle);
-    connect(prev, &QToolButton::clicked, player_, &Player::previous);
-    connect(next, &QToolButton::clicked, player_, &Player::next);
+    connect(prevButton_, &QToolButton::clicked, player_, &Player::previous);
+    connect(nextButton_, &QToolButton::clicked, player_, &Player::next);
     connect(shuffleButton_, &QToolButton::clicked, this, [this](bool on) { emit shuffleRequested(on); });
     connect(kidsButton_, &QToolButton::clicked, this, [this](bool on) { emit kidsRequested(on); });
     connect(repeatButton_, &QToolButton::clicked, this, &Transport::toggleRepeat);
@@ -186,6 +210,62 @@ Transport::Transport(Player *player, QWidget *parent)
     connect(ArtLoader::instance(), &ArtLoader::ready, this, [this] { syncTrack(); });
     syncState();
     syncTrack();
+    placeCluster();
+}
+
+bool Transport::event(QEvent *event)
+{
+    const bool styled = event->type() == QEvent::StyleChange || event->type() == QEvent::Show;
+    const bool ok = QWidget::event(event);
+    if (styled)
+        placeCluster();
+    return ok;
+}
+
+void Transport::placeCluster()
+{
+    if (!cluster_ || !playButton_)
+        return;
+    const int side = 40;
+    const int play = 56;
+    const int gap = 16;
+    playButton_->setFixedSize(play, play);
+    playButton_->setIconSize(QSize(22, 22));
+    playButton_->setGeometry(side + gap, 0, play, play);
+    const int sideY = qMax(0, (play - side) / 2);
+    if (prevButton_) {
+        prevButton_->setFixedSize(40, 40);
+        prevButton_->setGeometry(0, sideY, side, side);
+    }
+    if (nextButton_) {
+        nextButton_->setFixedSize(40, 40);
+        nextButton_->setGeometry(side + gap + play + gap, sideY, side, side);
+    }
+    cluster_->setFixedSize(side + gap + play + gap + side, play);
+}
+
+void Transport::elideTitles()
+{
+    const auto elide = [](QLabel *label, const QString &full) {
+        if (!label)
+            return;
+        const int width = label->width();
+        if (full.isEmpty() || width < 24) {
+            label->setText(full);
+            return;
+        }
+        const QString shown = QFontMetrics(label->font()).elidedText(full, Qt::ElideRight, width);
+        if (label->text() != shown)
+            label->setText(shown);
+    };
+    elide(titleLabel_, fullTitle_);
+    elide(artistLabel_, fullArtist_);
+}
+
+void Transport::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    elideTitles();
 }
 
 void Transport::setKidsMode(bool on)
@@ -247,28 +327,48 @@ void Transport::syncTrack()
 {
     const Track track = player_->current();
     if (track.path.isEmpty()) {
-        titleLabel_->setText(QStringLiteral("Nothing playing"));
-        artistLabel_->setText(QStringLiteral("Choose something from your library, or drop a file here"));
+        fullTitle_ = QStringLiteral("Nothing playing");
+        fullArtist_ = QStringLiteral("Choose something from your library, or drop a file here");
+        elideTitles();
         artButton_->setIcon(QIcon(ArtLoader::instance()->image({}, QStringLiteral("empty"), QStringLiteral("V"), QSize(64, 64), false)));
         setFavorite(false);
         return;
     }
-    titleLabel_->setText(track.displayTitle());
+    fullTitle_ = track.displayTitle();
     QString line = track.displayArtist();
     if (!track.isVideo() && !track.displayAlbum().isEmpty())
         line += QStringLiteral("  ·  ") + track.displayAlbum();
     if (player_->rate() != 1.f)
         line += QStringLiteral("  ·  %1×").arg(QString::number(player_->rate(), 'g', 3));
-    artistLabel_->setText(line);
+    fullArtist_ = line;
+    elideTitles();
     const QPixmap art = ArtLoader::instance()->image(track.artwork, track.path, track.displayTitle(), QSize(128, 128), track.isVideo());
     artButton_->setIcon(QIcon(art));
     artButton_->setIconSize(QSize(64, 64));
     setFavorite(track.favorite);
+    syncClock(player_->positionMs(), player_->durationMs());
 }
 
 void Transport::syncClock(qint64 position, qint64 duration)
 {
     duration_ = duration;
+    const Track track = player_->current();
+    const bool youtube = track.path.contains(QLatin1String("youtu"), Qt::CaseInsensitive);
+    const bool station = !youtube && !track.isVideo() && isStreamUrl(track.path)
+        && duration <= 0 && track.durationMs <= 0;
+    if (station) {
+        if (!scrubbing_) {
+            seek_->blockSignals(true);
+            seek_->setRange(0, 0);
+            seek_->setValue(0);
+            seek_->blockSignals(false);
+            leftTime_->setText(formatTime(position));
+        }
+        seek_->setEnabled(false);
+        rightTime_->setText(QStringLiteral("Live"));
+        return;
+    }
+    seek_->setEnabled(true);
     if (!scrubbing_) {
         seek_->blockSignals(true);
         seek_->setRange(0, int(qMax(qint64(0), duration)));

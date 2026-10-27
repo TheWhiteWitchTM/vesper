@@ -1,6 +1,7 @@
 #include "player.h"
 
 #include "videowidget.h"
+#include "youtube.h"
 
 #include <QFile>
 #include <QTimer>
@@ -224,6 +225,8 @@ QList<Track> Player::queue() const
 
 void Player::setQueue(const QList<Track> &tracks, int index, bool playNow)
 {
+    ++streamGen_;
+    streamFails_ = 0;
     queue_ = tracks;
     if (queue_.isEmpty()) {
         stop();
@@ -335,19 +338,29 @@ void Player::clearQueue()
 
 void Player::playCurrent()
 {
+    ++endToken_;
+    endArmed_ = false;
     if (!player_ || orderPos_ < 0 || orderPos_ >= order_.size())
         return;
     const Track track = current();
     if (track.path.isEmpty())
         return;
+    ++streamGen_;
     if (video_)
         video_->clearFrame();
     setVideoAttached(false);
     lastDuration_ = track.durationMs;
+    if (youtubeNeedsResolve(track)) {
+        emit trackChanged(track);
+        emit streamNeeded(streamGen_);
+        return;
+    }
 
+    const QString location = track.streamUrl.isEmpty() ? track.path : track.streamUrl;
+    const bool stream = isStreamUrl(location);
+    const QByteArray encoded = stream ? location.toUtf8() : QFile::encodeName(location);
     libvlc_media_t *media = nullptr;
-    const QByteArray encoded = QFile::encodeName(track.path);
-    if (isStreamUrl(track.path))
+    if (stream)
         media = libvlc_media_new_location(instance_, encoded.constData());
     else
         media = libvlc_media_new_path(instance_, encoded.constData());
@@ -361,6 +374,25 @@ void Player::playCurrent()
     libvlc_media_add_option(media, ":avcodec-hw=none");
     if (!replayGain_)
         libvlc_media_add_option(media, ":no-audio-replay-gain");
+    if (stream) {
+        // SomaFM answers 403 to the bare token "Mozilla/5.0". A full browser
+        // agent is accepted, and YouTube's CDN wants one too.
+        libvlc_media_add_option(media,
+            ":http-user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36");
+        libvlc_media_add_option(media, ":http-reconnect");
+        libvlc_media_add_option(media, ":network-caching=1200");
+        if (!track.isVideo())
+            libvlc_media_add_option(media, ":no-video");
+        const QString host = QUrl(location).host().toLower();
+        if (host.contains(QLatin1String("youtube")) || host.contains(QLatin1String("googlevideo"))
+            || host == QLatin1String("youtu.be"))
+            libvlc_media_add_option(media, ":http-referrer=https://www.youtube.com/");
+    }
+    if (!track.audioSlave.isEmpty()) {
+        const QByteArray slave = track.audioSlave.toUtf8();
+        libvlc_media_slaves_add(media, libvlc_media_slave_type_audio, 4, slave.constData());
+    }
 
     libvlc_media_player_set_media(player_, media);
     libvlc_media_release(media);
@@ -407,6 +439,17 @@ void Player::onVlc(int type, const QString &error)
     switch (type) {
     case libvlc_MediaPlayerPlaying:
         state_ = State::Playing;
+        endArmed_ = true;
+        streamRetried_ = false;
+        {
+            // A station that dies in the first moment must count as a failure.
+            // One that is actually going can drop later and start the count over.
+            const int gen = streamGen_;
+            QTimer::singleShot(2500, this, [this, gen] {
+                if (gen == streamGen_ && state_ == State::Playing)
+                    streamFails_ = 0;
+            });
+        }
         applyEqualizer();
         applyOutput();
         emit stateChanged(state_);
@@ -419,11 +462,16 @@ void Player::onVlc(int type, const QString &error)
         emit stateChanged(state_);
         break;
     case libvlc_MediaPlayerEndReached:
-        QTimer::singleShot(0, this, &Player::onEnded);
+        if (!endArmed_)
+            break;
+        endArmed_ = false;
+        scheduleEnd();
         break;
     case libvlc_MediaPlayerEncounteredError:
-        emit errorOccurred(error.isEmpty() ? QStringLiteral("Playback failed") : error);
-        QTimer::singleShot(0, this, &Player::onEnded);
+        if (retryResolvedStream())
+            return;
+        endArmed_ = false;
+        scheduleEnd(error.isEmpty() ? QStringLiteral("Playback failed") : error);
         break;
     case libvlc_MediaPlayerLengthChanged:
         if (player_) {
@@ -437,6 +485,27 @@ void Player::onVlc(int type, const QString &error)
     }
 }
 
+void Player::scheduleEnd(const QString &error)
+{
+    const int token = ++endToken_;
+    QTimer::singleShot(0, this, [this, token, error] {
+        if (token != endToken_)
+            return;
+        if (!error.isEmpty() && !endlessStation(current()))
+            emit errorOccurred(error);
+        onEnded();
+    });
+}
+
+bool Player::endlessStation(const Track &track) const
+{
+    if (track.isVideo() || track.durationMs > 0 || lastDuration_ > 0)
+        return false;
+    if (!isStreamUrl(track.path) || !youtubeVideoId(track.path).isEmpty())
+        return false;
+    return true;
+}
+
 void Player::onEnded()
 {
     if (stopAfter_) {
@@ -448,6 +517,24 @@ void Player::onEnded()
     }
     if (repeat_ == Repeat::One) {
         playCurrent();
+        return;
+    }
+    if (endlessStation(current())) {
+        if (streamFails_ >= 4) {
+            streamFails_ = 0;
+            state_ = State::Stopped;
+            setVideoAttached(false);
+            emit stateChanged(state_);
+            emit errorOccurred(QStringLiteral("That station stopped."));
+            return;
+        }
+        ++streamFails_;
+        const int token = endToken_;
+        QTimer::singleShot(300 * streamFails_, this, [this, token] {
+            if (token != endToken_)
+                return;
+            playCurrent();
+        });
         return;
     }
     if (!advance(1)) {
@@ -489,6 +576,8 @@ void Player::pause()
 
 void Player::stop()
 {
+    ++endToken_;
+    endArmed_ = false;
     if (player_)
         libvlc_media_player_stop(player_);
     state_ = State::Stopped;
@@ -509,6 +598,12 @@ void Player::next()
 
 void Player::previous()
 {
+    if (endlessStation(current())) {
+        if (!advance(-1))
+            return;
+        playCurrent();
+        return;
+    }
     if (positionMs() > 3000) {
         seekMs(0);
         return;
@@ -522,7 +617,7 @@ void Player::previous()
 
 void Player::seekMs(qint64 ms)
 {
-    if (!player_)
+    if (!player_ || endlessStation(current()))
         return;
     ms = qMax(qint64(0), ms);
     libvlc_media_player_set_time(player_, ms);
@@ -547,6 +642,10 @@ void Player::poll()
     if (length > 0)
         lastDuration_ = length;
     emit positionChanged(position, lastDuration_);
+    if (++metaTick_ >= 25) {
+        metaTick_ = 0;
+        noteStreamTitle();
+    }
 }
 
 void Player::setVolume(int volume)
@@ -583,7 +682,13 @@ void Player::noteQueued(const Track &track)
                           || (!track.path.isEmpty() && row.path == track.path);
         if (!same)
             continue;
+        const QString streamUrl = row.streamUrl;
+        const QString audioSlave = row.audioSlave;
         row = track;
+        if (row.streamUrl.isEmpty())
+            row.streamUrl = streamUrl;
+        if (row.audioSlave.isEmpty())
+            row.audioSlave = audioSlave;
         changed = true;
     }
     if (!changed)
@@ -594,6 +699,113 @@ void Player::noteQueued(const Track &track)
                             || (!track.path.isEmpty() && !playing.path.isEmpty() && playing.path == track.path);
     if (currentHit)
         emit trackMetaChanged(current());
+}
+
+void Player::writeStream(Track &track, const QString &mediaUrl, const QString &audioUrl,
+                         const QString &title, const QString &author, qint64 durationMs, bool picture)
+{
+    track.streamUrl = mediaUrl;
+    track.audioSlave = audioUrl;
+    if (!title.isEmpty())
+        track.title = title;
+    if (!author.isEmpty())
+        track.artist = author;
+    if (durationMs > 0)
+        track.durationMs = durationMs;
+    track.kind = picture ? QStringLiteral("video") : QStringLiteral("audio");
+}
+
+void Player::acceptStream(int generation, const QString &mediaUrl, const QString &audioUrl,
+                          const QString &title, const QString &author, qint64 durationMs, bool picture)
+{
+    if (generation != streamGen_ || mediaUrl.isEmpty())
+        return;
+    if (orderPos_ < 0 || orderPos_ >= order_.size())
+        return;
+    const int source = order_.at(orderPos_);
+    if (source < 0 || source >= queue_.size())
+        return;
+    writeStream(queue_[source], mediaUrl, audioUrl, title, author, durationMs, picture);
+    emit queueChanged();
+    playCurrent();
+}
+
+void Player::storeStream(int displayedIndex, const QString &mediaUrl, const QString &audioUrl,
+                         const QString &title, const QString &author, qint64 durationMs, bool picture)
+{
+    if (displayedIndex < 0 || displayedIndex >= order_.size() || mediaUrl.isEmpty())
+        return;
+    const int source = order_.at(displayedIndex);
+    if (source < 0 || source >= queue_.size())
+        return;
+    Track &track = queue_[source];
+    if (!track.streamUrl.isEmpty())
+        return;
+    writeStream(track, mediaUrl, audioUrl, title, author, durationMs, picture);
+    emit queueChanged();
+}
+
+void Player::rejectStream(int generation, const QString &error)
+{
+    if (generation != streamGen_)
+        return;
+    if (!error.isEmpty())
+        emit errorOccurred(error);
+    if (++streamFails_ > qMax(1, order_.size())) {
+        streamFails_ = 0;
+        state_ = State::Stopped;
+        emit stateChanged(state_);
+        return;
+    }
+    if (!advance(1)) {
+        state_ = State::Stopped;
+        emit stateChanged(state_);
+        return;
+    }
+    playCurrent();
+}
+
+bool Player::retryResolvedStream()
+{
+    if (orderPos_ < 0 || orderPos_ >= order_.size() || streamRetried_)
+        return false;
+    const int source = order_.at(orderPos_);
+    if (source < 0 || source >= queue_.size())
+        return false;
+    Track &track = queue_[source];
+    if (track.streamUrl.isEmpty() || youtubeVideoId(track.path).isEmpty())
+        return false;
+    streamRetried_ = true;
+    track.streamUrl.clear();
+    track.audioSlave.clear();
+    QTimer::singleShot(0, this, &Player::playCurrent);
+    return true;
+}
+
+void Player::noteStreamTitle()
+{
+    if (!player_ || orderPos_ < 0 || orderPos_ >= order_.size())
+        return;
+    const int source = order_.at(orderPos_);
+    if (source < 0 || source >= queue_.size())
+        return;
+    Track &track = queue_[source];
+    if (!isStreamUrl(track.path) || track.isVideo() || !youtubeVideoId(track.path).isEmpty())
+        return;
+    libvlc_media_t *media = libvlc_media_player_get_media(player_);
+    if (!media)
+        return;
+    char *now = libvlc_media_get_meta(media, libvlc_meta_NowPlaying);
+    libvlc_media_release(media);
+    if (!now)
+        return;
+    const QString title = QString::fromUtf8(now).trimmed();
+    libvlc_free(now);
+    if (title.isEmpty() || title == track.title)
+        return;
+    track.title = title;
+    emit queueChanged();
+    emit trackMetaChanged(track);
 }
 
 void Player::setMuted(bool muted)

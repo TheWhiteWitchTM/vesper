@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QPair>
 #include <QSettings>
 #include <QStringList>
 
@@ -25,6 +26,10 @@ public:
     void setReplayGain(bool on);
     bool scanAtStartup() const;
     void setScanAtStartup(bool on);
+    bool playerFolded() const;
+    void setPlayerFolded(bool on);
+    int dockHeight() const;
+    void setDockHeight(int px);
 
     bool shuffle() const;
     void setShuffle(bool on);
@@ -56,6 +61,13 @@ public:
 
     QString organizeDir() const;
     void setOrganizeDir(const QString &dir);
+
+    // name, stream url
+    QList<QPair<QString, QString>> radioStations() const;
+    void setRadioStations(const QList<QPair<QString, QString>> &stations);
+    // channel id, name
+    QList<QPair<QString, QString>> youtubeChannels() const;
+    void setYoutubeChannels(const QList<QPair<QString, QString>> &channels);
 
     bool kidsMode() const;
     void setKidsMode(bool on);

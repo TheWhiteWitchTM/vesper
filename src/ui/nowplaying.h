@@ -8,6 +8,8 @@ class Library;
 class Player;
 class QLabel;
 class QListWidget;
+class QStackedWidget;
+class WitchStage;
 
 class NowPlaying : public QWidget {
 public:
@@ -27,6 +29,8 @@ private:
     Library *library_ = nullptr;
     Player *player_ = nullptr;
     QLabel *art_ = nullptr;
+    QStackedWidget *artStack_ = nullptr;
+    WitchStage *stage_ = nullptr;
     QLabel *title_ = nullptr;
     QLabel *detail_ = nullptr;
     QLabel *overview_ = nullptr;

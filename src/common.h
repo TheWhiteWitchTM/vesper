@@ -43,12 +43,17 @@ struct Track {
     int episode = 0;
     int idLookup = 0;
     qint64 idLookupAt = 0;
+    QString shelf; // "music" lists a video with the songs
+    // Filled when a page link is turned into a direct stream. Not stored.
+    QString streamUrl;
+    QString audioSlave;
 
     QString displayTitle() const;
     QString displayArtist() const;
     QString displayAlbum() const;
     QString albumKeyArtist() const;
     bool isVideo() const { return kind == QLatin1String("video"); }
+    bool onMusicShelf() const { return kind == QLatin1String("audio") || shelf == QLatin1String("music"); }
 };
 
 struct Album {
@@ -75,6 +80,8 @@ struct Folder {
     qint64 id = 0;
     QString path;
     bool watchStartup = true;
+    // empty, music, movies, series, or music_videos
+    QString role;
 };
 
 struct LibraryStats {
@@ -98,7 +105,41 @@ struct SeriesName {
 };
 
 SeriesName seriesFromBaseName(const QString &fileBaseName);
+// Show, season, and episode from the filename and from Season folders above it.
+SeriesName seriesFromPath(const QString &path);
 void applySeriesFromFileName(Track &track);
+int seasonFromFolderName(const QString &name);
+bool usableShowName(const QString &name);
+
+struct SeriesHint {
+    QString show;
+    int season = 0;
+    int episode = 0;
+};
+
+// Stored tags win. Empty fields fall back to the path.
+SeriesHint seriesHint(const Track &track);
+// Case-folded key so "Married with Children" and "Married With Children" are one show.
+QString showGroupKey(const QString &showName);
+// Title case when a name is all one case. Mixed case is left as it was written.
+QString polishCase(const QString &text);
+// CamelCase, dots, and underscores become a readable name, then polishCase().
+QString presentMediaName(const QString &text);
+// The spelling with the most votes. A tie prefers mixed case, then more capitals.
+QString preferredSpelling(const QHash<QString, int> &votes);
+
+enum class MediaBucket { None, Music, Movie, Series };
+// Nearest Music, Movies, or Series folder in the path. The one closest to the file wins.
+MediaBucket mediaBucket(const QString &path);
+// That folder's own spelling, such as "Musik" or "Series".
+QString containerLabel(const QString &path, MediaBucket bucket);
+bool pathIsMusicVideo(const QString &path);
+bool genericMediaFolder(const QString &name);
+// shelf is "music" or empty. folderRole is the role stored for the library root.
+QString trackShelf(const QString &path, const QString &kind, const QString &folderRole);
+// Fills shelf, show, season, and episode from the path. A music shelf clears the show.
+void applyLibraryPlacement(Track &track, const QString &folderRole, const QString &folderPath = {});
+
 bool pathIsPrivate(const QString &path);
 QString normalizeContent(const QString &label);
 QString safeFileComponent(const QString &text);

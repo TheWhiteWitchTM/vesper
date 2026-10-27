@@ -15,6 +15,8 @@ public:
 
     void setEnabled(bool on);
     bool enabled() const { return enabled_; }
+    // Skip library reads on the window thread while a scan holds the database.
+    void hold(bool on);
     void kick();
     void refetch(const Track &track);
 
@@ -49,6 +51,7 @@ private:
     bool enabled_ = true;
     bool busy_ = false;
     bool paused_ = false;
+    bool held_ = false;
     int failures_ = 0;
     Track job_;
     Step step_ = Step::Done;

@@ -82,9 +82,31 @@ void VideoWidget::displayCb(void *opaque, void *)
     QMetaObject::invokeMethod(self, [self] { self->present(); }, Qt::QueuedConnection);
 }
 
+namespace {
+
+// VAAPI, VDPAU, and the other hardware surfaces. Asking the converter to
+// turn one of these into RGB makes it call back in a loop and the picture
+// never starts. Declining lets libVLC offer a software frame instead.
+bool opaqueChroma(const char *chroma)
+{
+    static const char *kOpaque[] = {
+        "VAOP", "VAO0", "VDV0", "VDV2", "VDV4", "VDOR",
+        "DX11", "DX10", "DXA9", "DXA0", "CVPP", "CVPI", "CVPY", "CVPN",
+    };
+    for (const char *code : kOpaque) {
+        if (std::memcmp(chroma, code, 4) == 0)
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 unsigned VideoWidget::setup(char *chroma, unsigned *width, unsigned *height,
                             unsigned *pitches, unsigned *lines)
 {
+    if (opaqueChroma(chroma))
+        return 0;
     QMutexLocker lock(&mutex_);
     unsigned w = *width;
     unsigned h = *height;
@@ -113,6 +135,19 @@ unsigned VideoWidget::setup(char *chroma, unsigned *width, unsigned *height,
 
 void VideoWidget::present()
 {
+    if (!isVisible()) {
+        bool first = false;
+        {
+            QMutexLocker lock(&mutex_);
+            if (shown_.isNull())
+                return;
+            first = !has_;
+            has_ = true;
+        }
+        if (first)
+            emit frameReady();
+        return;
+    }
     {
         QMutexLocker lock(&mutex_);
         if (shown_.isNull())
@@ -150,7 +185,10 @@ void VideoWidget::mousePressEvent(QMouseEvent *event)
 
 void VideoWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton)
+    if (event->button() == Qt::LeftButton) {
         emit doubleClicked();
+        event->accept();
+        return;
+    }
     QWidget::mouseDoubleClickEvent(event);
 }

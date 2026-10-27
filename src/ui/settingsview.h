@@ -31,7 +31,10 @@ private:
     Library *library_ = nullptr;
     Settings *settings_ = nullptr;
     Player *player_ = nullptr;
+    void syncRoleBox();
+
     class QListWidget *folders_ = nullptr;
+    class QComboBox *roleBox_ = nullptr;
     class QComboBox *devices_ = nullptr;
     class QLineEdit *skipEdit_ = nullptr;
     class QCheckBox *kidsBox_ = nullptr;

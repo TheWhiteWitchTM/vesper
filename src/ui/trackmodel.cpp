@@ -1,6 +1,9 @@
 #include "ui/trackmodel.h"
 
 #include <QColor>
+#include <QHeaderView>
+#include <QStringList>
+#include <QTableView>
 
 namespace {
 
@@ -18,6 +21,99 @@ QString showLabel(const Track &track)
     if (!track.showName.trimmed().isEmpty())
         return track.showName.trimmed();
     return track.displayArtist();
+}
+
+bool numericSortKey(const QVariant &value)
+{
+    switch (value.metaType().id()) {
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::Long:
+    case QMetaType::ULong:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+    case QMetaType::Double:
+    case QMetaType::Float:
+    case QMetaType::Short:
+    case QMetaType::UShort:
+        return true;
+    default:
+        return false;
+    }
+}
+
+int naturalCompare(const QString &left, const QString &right)
+{
+    int i = 0;
+    int j = 0;
+    while (i < left.size() && j < right.size()) {
+        const bool leftDigit = left.at(i).isDigit();
+        const bool rightDigit = right.at(j).isDigit();
+        if (leftDigit && rightDigit) {
+            const int iStart = i;
+            const int jStart = j;
+            while (i < left.size() && left.at(i).isDigit())
+                ++i;
+            while (j < right.size() && right.at(j).isDigit())
+                ++j;
+            int iTrim = iStart;
+            int jTrim = jStart;
+            while (iTrim < i - 1 && left.at(iTrim) == QLatin1Char('0'))
+                ++iTrim;
+            while (jTrim < j - 1 && right.at(jTrim) == QLatin1Char('0'))
+                ++jTrim;
+            const int leftLen = i - iTrim;
+            const int rightLen = j - jTrim;
+            if (leftLen != rightLen)
+                return leftLen < rightLen ? -1 : 1;
+            for (int k = 0; k < leftLen; ++k) {
+                const QChar a = left.at(iTrim + k);
+                const QChar b = right.at(jTrim + k);
+                if (a != b)
+                    return a < b ? -1 : 1;
+            }
+            continue;
+        }
+        if (leftDigit != rightDigit)
+            return leftDigit ? -1 : 1;
+        const QChar a = left.at(i).toLower();
+        const QChar b = right.at(j).toLower();
+        if (a != b)
+            return a < b ? -1 : 1;
+        ++i;
+        ++j;
+    }
+    if (i == left.size() && j == right.size())
+        return 0;
+    return i == left.size() ? -1 : 1;
+}
+
+QString videoTitle(const Track &track, bool withShow)
+{
+    const QString title = track.displayTitle();
+    if (!withShow)
+        return title;
+    const QString show = track.showName.trimmed();
+    if (show.isEmpty() || title.startsWith(show, Qt::CaseInsensitive))
+        return title;
+    return QStringLiteral("%1  ·  %2").arg(show, title);
+}
+
+QString videoTip(const Track &track)
+{
+    QStringList lines;
+    lines << track.displayTitle();
+    const QString show = track.showName.trimmed();
+    if (!show.isEmpty() && !track.displayTitle().startsWith(show, Qt::CaseInsensitive))
+        lines << show;
+    const QString artist = track.displayArtist();
+    if (!artist.isEmpty())
+        lines << artist;
+    if (!track.genre.trimmed().isEmpty())
+        lines << track.genre.trimmed();
+    if (!track.content.isEmpty())
+        lines << track.content;
+    return lines.join(QLatin1Char('\n'));
 }
 
 } // namespace
@@ -52,6 +148,24 @@ void TrackModel::setVideoLayout(bool on)
     emit headerDataChanged(Qt::Horizontal, 0, columnCount() - 1);
     if (!rows_.isEmpty())
         emit dataChanged(index(0, 0), index(rows_.size() - 1, columnCount() - 1));
+}
+
+void TrackModel::setIncludeShowInTitle(bool on)
+{
+    includeShowInTitle_ = on;
+}
+
+void TrackModel::noteProbe(qint64 id, qint64 durationMs)
+{
+    if (id <= 0 || durationMs <= 0)
+        return;
+    for (int row = 0; row < rows_.size(); ++row) {
+        if (rows_.at(row).id != id)
+            continue;
+        rows_[row].durationMs = durationMs;
+        emit dataChanged(index(row, 5), index(row, 5));
+        return;
+    }
 }
 
 void TrackModel::updateTrack(const Track &track)
@@ -105,13 +219,15 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
         if (track.content == QLatin1String("G"))
             return QColor(QStringLiteral("#8fbf8f"));
     }
+    if (role == Qt::ToolTipRole && videoLayout_ && index.column() == 2)
+        return videoTip(track);
 
     if (role == Qt::UserRole) {
         if (videoLayout_) {
             switch (index.column()) {
             case 0: return track.id == nowId_ ? 0 : 1;
             case 1: return track.episode > 0 ? track.season * 10000 + track.episode : track.year;
-            case 2: return track.displayTitle().toLower();
+            case 2: return videoTitle(track, includeShowInTitle_).toLower();
             case 3: return showLabel(track).toLower();
             case 4: return track.genre.toLower();
             case 5: return track.durationMs;
@@ -143,7 +259,7 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
                 return mark;
             return track.year > 0 ? QString::number(track.year) : QString();
         }
-        case 2: return track.displayTitle();
+        case 2: return videoTitle(track, includeShowInTitle_);
         case 3: return showLabel(track);
         case 4: return track.genre;
         case 5: return track.durationMs > 0 ? formatTime(track.durationMs) : QStringLiteral("—");
@@ -188,17 +304,36 @@ QVariant TrackModel::headerData(int section, Qt::Orientation orientation, int ro
 TrackProxy::TrackProxy(QObject *parent)
     : QSortFilterProxyModel(parent)
 {
+    setSortRole(Qt::UserRole);
     setSortCaseSensitivity(Qt::CaseInsensitive);
-    setDynamicSortFilter(false);
+    setDynamicSortFilter(true);
 }
 
 bool TrackProxy::lessThan(const QModelIndex &left, const QModelIndex &right) const
 {
     const QVariant a = sourceModel()->data(left, Qt::UserRole);
     const QVariant b = sourceModel()->data(right, Qt::UserRole);
-    if (a.metaType().id() == QMetaType::LongLong || a.metaType().id() == QMetaType::Int)
+    const bool aNumber = numericSortKey(a);
+    const bool bNumber = numericSortKey(b);
+    if (aNumber && bNumber)
         return a.toLongLong() < b.toLongLong();
-    return QSortFilterProxyModel::lessThan(left, right);
+    if (aNumber != bNumber)
+        return aNumber;
+    return naturalCompare(a.toString(), b.toString()) < 0;
+}
+
+void reapplySort(QTableView *table)
+{
+    auto *proxy = qobject_cast<QSortFilterProxyModel *>(table ? table->model() : nullptr);
+    if (!proxy)
+        return;
+    const int column = table->horizontalHeader()->sortIndicatorSection();
+    if (column < 0)
+        return;
+    const auto order = table->horizontalHeader()->sortIndicatorOrder();
+    proxy->setDynamicSortFilter(false);
+    proxy->sort(column, order);
+    proxy->setDynamicSortFilter(true);
 }
 
 AlbumModel::AlbumModel(QObject *parent)

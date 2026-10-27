@@ -21,8 +21,12 @@ public:
     QString lastError() const { return error_; }
 
     QList<Folder> folders() const;
-    qint64 addFolder(const QString &path, bool watchStartup);
+    qint64 addFolder(const QString &path, bool watchStartup, const QString &role = {});
+    void setFolderRole(qint64 id, const QString &role);
     void removeFolder(qint64 id);
+    // Rewrites show names, seasons, and the music shelf from folder names.
+    QString reclassify();
+    QString refreshNote() const { return refreshNote_; }
 
     bool upsertTracks(const QList<Track> &tracks);
     void removeMissing(qint64 folderId, const QSet<QString> &seen);
@@ -71,6 +75,8 @@ public:
     void removePlaylistItems(const QList<qint64> &itemIds);
 
     LibraryStats stats() const;
+    // After a worker thread wrote the database itself.
+    void refresh();
 
 signals:
     void changed();
@@ -83,10 +89,16 @@ private:
     void touch();
     void migrate();
 
+    QString applyClassification();
+
     QSqlDatabase db_;
     QString error_;
+    QString refreshNote_;
     QTimer *touchTimer_ = nullptr;
 };
+
+// Safe to call from a worker thread. Opens its own connection.
+QList<Track> readTracksKind(const QString &databasePath, const QString &kind);
 
 // Safe to call from the scanner thread on a connection that thread opened.
 bool writeTrackBatch(QSqlDatabase &db, const QList<Track> &tracks, QString *error);

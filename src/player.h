@@ -51,6 +51,12 @@ public:
     int volume() const { return volume_; }
     void retargetPath(const QString &from, const QString &to);
     void noteQueued(const Track &track);
+    // A YouTube page link is resolved before it plays. generation matches streamNeeded.
+    void acceptStream(int generation, const QString &mediaUrl, const QString &audioUrl,
+                      const QString &title, const QString &author, qint64 durationMs, bool picture);
+    void storeStream(int displayedIndex, const QString &mediaUrl, const QString &audioUrl,
+                     const QString &title, const QString &author, qint64 durationMs, bool picture);
+    void rejectStream(int generation, const QString &error);
     void setMuted(bool muted);
     bool isMuted() const { return muted_; }
 
@@ -103,6 +109,7 @@ signals:
     void finishedQueue();
     void mediaInfoChanged();
     void seeked(qint64 positionMs);
+    void streamNeeded(int generation);
 
 private:
     void playCurrent();
@@ -114,6 +121,12 @@ private:
     bool advance(int direction);
     void refreshEs();
     void setVideoAttached(bool on);
+    void noteStreamTitle();
+    bool retryResolvedStream();
+    void scheduleEnd(const QString &error = QString());
+    bool endlessStation(const Track &track) const;
+    void writeStream(Track &track, const QString &mediaUrl, const QString &audioUrl,
+                     const QString &title, const QString &author, qint64 durationMs, bool picture);
 
     libvlc_instance_t *instance_ = nullptr;
     libvlc_media_player_t *player_ = nullptr;
@@ -143,4 +156,12 @@ private:
     bool hasVideo_ = false;
     qint64 lastDuration_ = 0;
     QTimer *pollTimer_ = nullptr;
+    int streamGen_ = 0;
+    int streamFails_ = 0;
+    int metaTick_ = 0;
+    bool streamRetried_ = false;
+    // EndReached also fires when the current media is replaced. It only counts
+    // after Playing, and a newer play cancels one that was already queued.
+    bool endArmed_ = false;
+    int endToken_ = 0;
 };

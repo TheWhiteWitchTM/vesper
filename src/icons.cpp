@@ -238,6 +238,37 @@ QIcon Icons::queue(const QColor &color)
     });
 }
 
+QIcon Icons::radio(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.setBrush(p.pen().color());
+        p.drawEllipse(r.center(), r.width() * 0.07, r.height() * 0.07);
+        p.setBrush(Qt::NoBrush);
+        const QRectF inner(r.center().x() - r.width() * 0.24, r.center().y() - r.height() * 0.24,
+                           r.width() * 0.48, r.height() * 0.48);
+        const QRectF outer(r.center().x() - r.width() * 0.42, r.center().y() - r.height() * 0.42,
+                           r.width() * 0.84, r.height() * 0.84);
+        p.drawArc(inner, 40 * 16, 130 * 16);
+        p.drawArc(inner, 220 * 16, 130 * 16);
+        p.drawArc(outer, 35 * 16, 140 * 16);
+        p.drawArc(outer, 215 * 16, 140 * 16);
+    });
+}
+
+QIcon Icons::youtube(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawRoundedRect(r.adjusted(0, r.height() * 0.24, 0, -r.height() * 0.24), r.height() * 0.16, r.height() * 0.16);
+        QPainterPath tri;
+        tri.moveTo(r.center().x() - r.width() * 0.1, r.center().y() - r.height() * 0.12);
+        tri.lineTo(r.center().x() - r.width() * 0.1, r.center().y() + r.height() * 0.12);
+        tri.lineTo(r.center().x() + r.width() * 0.16, r.center().y());
+        tri.closeSubpath();
+        p.setBrush(p.pen().color());
+        p.drawPath(tri);
+    });
+}
+
 QIcon Icons::settings(const QColor &color)
 {
     return paint(color, false, [](QPainter &p, const QRectF &r) {
@@ -289,9 +320,41 @@ QIcon Icons::moon(const QColor &color)
     });
 }
 
+QIcon Icons::chevron(bool down, const QColor &color)
+{
+    QIcon icon;
+    for (int size : {16, 20, 24, 32}) {
+        QPixmap pixmap(size, size);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QPen pen(color, size >= 24 ? 2.4 : 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        const QRectF r(2.0, 2.0, size - 4.0, size - 4.0);
+        QPainterPath path;
+        if (down) {
+            path.moveTo(r.left() + r.width() * 0.18, r.top() + r.height() * 0.34);
+            path.lineTo(r.center().x(), r.bottom() - r.height() * 0.28);
+            path.lineTo(r.right() - r.width() * 0.18, r.top() + r.height() * 0.34);
+        } else {
+            path.moveTo(r.left() + r.width() * 0.18, r.bottom() - r.height() * 0.34);
+            path.lineTo(r.center().x(), r.top() + r.height() * 0.28);
+            path.lineTo(r.right() - r.width() * 0.18, r.bottom() - r.height() * 0.34);
+        }
+        painter.drawPath(path);
+        painter.end();
+        icon.addPixmap(pixmap);
+    }
+    return icon;
+}
+
 QIcon Icons::fullscreen(const QColor &color)
 {
     return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPen pen = p.pen();
+        pen.setWidthF(r.width() > 18 ? 2.3 : 1.9);
+        p.setPen(pen);
         const qreal a = r.width() * 0.34;
         p.drawLine(r.topLeft(), r.topLeft() + QPointF(a, 0));
         p.drawLine(r.topLeft(), r.topLeft() + QPointF(0, a));
@@ -301,6 +364,29 @@ QIcon Icons::fullscreen(const QColor &color)
         p.drawLine(r.bottomLeft(), r.bottomLeft() + QPointF(0, -a));
         p.drawLine(r.bottomRight(), r.bottomRight() + QPointF(-a, 0));
         p.drawLine(r.bottomRight(), r.bottomRight() + QPointF(0, -a));
+    });
+}
+
+QIcon Icons::fullscreenExit(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPen pen = p.pen();
+        pen.setWidthF(r.width() > 18 ? 2.3 : 1.9);
+        p.setPen(pen);
+        const qreal inset = r.width() * 0.38;
+        const qreal arm = r.width() * 0.30;
+        const QPointF tl = r.topLeft() + QPointF(inset, inset);
+        const QPointF tr = r.topRight() + QPointF(-inset, inset);
+        const QPointF bl = r.bottomLeft() + QPointF(inset, -inset);
+        const QPointF br = r.bottomRight() + QPointF(-inset, -inset);
+        p.drawLine(tl, tl + QPointF(-arm, 0));
+        p.drawLine(tl, tl + QPointF(0, -arm));
+        p.drawLine(tr, tr + QPointF(arm, 0));
+        p.drawLine(tr, tr + QPointF(0, -arm));
+        p.drawLine(bl, bl + QPointF(-arm, 0));
+        p.drawLine(bl, bl + QPointF(0, arm));
+        p.drawLine(br, br + QPointF(arm, 0));
+        p.drawLine(br, br + QPointF(0, arm));
     });
 }
 

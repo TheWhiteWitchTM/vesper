@@ -7,6 +7,7 @@
 
 #include <QComboBox>
 #include <QHeaderView>
+#include <QSignalBlocker>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListView>
@@ -31,7 +32,8 @@ void prepare(QTableView *table)
     table->setSortingEnabled(true);
     table->verticalHeader()->hide();
     table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    table->verticalHeader()->setDefaultSectionSize(38);
+    table->verticalHeader()->setMinimumSectionSize(28);
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->horizontalHeader()->setStretchLastSection(false);
     table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Interactive);
@@ -58,7 +60,8 @@ void prepareCount(QTableWidget *table, const QStringList &headers)
     table->setSortingEnabled(false);
     table->verticalHeader()->hide();
     table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    table->verticalHeader()->setDefaultSectionSize(36);
+    table->verticalHeader()->setMinimumSectionSize(28);
+    table->verticalHeader()->setDefaultSectionSize(30);
     table->horizontalHeader()->setStretchLastSection(false);
     table->horizontalHeader()->setHighlightSections(false);
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -75,6 +78,20 @@ void setCountCell(QTableWidget *table, int row, int column, int value)
     item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
     item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
     table->setItem(row, column, item);
+}
+
+void keepSort(QTableWidget *table, int fallbackColumn)
+{
+    int column = table->horizontalHeader()->sortIndicatorSection();
+    Qt::SortOrder order = table->horizontalHeader()->sortIndicatorOrder();
+    if (column < 0 || column >= table->columnCount()) {
+        column = fallbackColumn;
+        order = Qt::AscendingOrder;
+    }
+    table->setSortingEnabled(true);
+    const QSignalBlocker block(table->horizontalHeader());
+    table->sortItems(column, order);
+    table->horizontalHeader()->setSortIndicator(column, order);
 }
 
 void fillCombo(QComboBox *box, const QStringList &names, const QString &pick, const QString &allLabel)
@@ -104,21 +121,24 @@ MusicView::MusicView(Library *library, QWidget *parent)
     auto *artistsButton = new QPushButton(QStringLiteral("Artists"));
     auto *tracksButton = new QPushButton(QStringLiteral("Songs"));
     auto *genresButton = new QPushButton(QStringLiteral("Genres"));
-    for (QPushButton *button : {albumsButton, artistsButton, tracksButton, genresButton}) {
-        button->setCheckable(true);
+    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
+    for (QPushButton *button : {albumsButton, artistsButton, tracksButton, genresButton, shuffle}) {
+        button->setObjectName(QStringLiteral("modeBtn"));
         button->setCursor(Qt::PointingHandCursor);
+        button->setFixedHeight(28);
     }
+    for (QPushButton *button : {albumsButton, artistsButton, tracksButton, genresButton})
+        button->setCheckable(true);
     albumsButton->setChecked(true);
     auto *modes = new QHBoxLayout;
+    modes->setContentsMargins(0, 0, 0, 0);
+    modes->setSpacing(4);
     modes->addWidget(albumsButton);
     modes->addWidget(artistsButton);
     modes->addWidget(tracksButton);
-    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
     modes->addWidget(genresButton);
     modes->addStretch();
     modes->addWidget(shuffle);
-    auto *hint = new QLabel(QStringLiteral("Albums open on a click. Songs, artists, and genres are tables."));
-    hint->setObjectName(QStringLiteral("hint"));
 
     stack_ = new QStackedWidget;
     albums_ = new AlbumModel(this);
@@ -127,14 +147,14 @@ MusicView::MusicView(Library *library, QWidget *parent)
     albumGrid_->setViewMode(QListView::IconMode);
     albumGrid_->setResizeMode(QListView::Adjust);
     albumGrid_->setMovement(QListView::Static);
-    albumGrid_->setSpacing(4);
+    albumGrid_->setSpacing(2);
     albumGrid_->setUniformItemSizes(true);
     albumGrid_->setLayoutMode(QListView::Batched);
     albumGrid_->setBatchSize(24);
     albumGrid_->setWordWrap(true);
     albumGrid_->setMouseTracking(true);
     albumGrid_->viewport()->setAttribute(Qt::WA_Hover);
-    albumGrid_->setItemDelegate(new CoverDelegate(QSize(210, 286), QSize(176, 176), false, albumGrid_));
+    albumGrid_->setItemDelegate(new CoverDelegate(QSize(168, 214), QSize(140, 140), false, albumGrid_));
     albumGrid_->setSelectionMode(QAbstractItemView::SingleSelection);
     albumGrid_->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -159,8 +179,10 @@ MusicView::MusicView(Library *library, QWidget *parent)
     artistFilter_ = new QComboBox;
     albumFilter_ = new QComboBox;
     labelFilter_ = new QComboBox;
-    for (QComboBox *box : {genreFilter_, artistFilter_, albumFilter_, labelFilter_})
+    for (QComboBox *box : {genreFilter_, artistFilter_, albumFilter_, labelFilter_}) {
+        box->setObjectName(QStringLiteral("libraryFilter"));
         tuneFilter(box);
+    }
     labelFilter_->addItem(QStringLiteral("All labels"), QString());
     labelFilter_->addItem(QStringLiteral("G"), QStringLiteral("G"));
     labelFilter_->addItem(QStringLiteral("PG"), QStringLiteral("PG"));
@@ -169,9 +191,9 @@ MusicView::MusicView(Library *library, QWidget *parent)
     auto *songs = new QWidget;
     auto *songsLayout = new QVBoxLayout(songs);
     songsLayout->setContentsMargins(0, 0, 0, 0);
-    songsLayout->setSpacing(8);
+    songsLayout->setSpacing(4);
     auto *filters = new QHBoxLayout;
-    filters->setSpacing(8);
+    filters->setSpacing(6);
     auto addFilter = [&](const QString &title, QComboBox *box, int stretch) {
         auto *caption = new QLabel(title);
         caption->setObjectName(QStringLiteral("hint"));
@@ -214,9 +236,9 @@ MusicView::MusicView(Library *library, QWidget *parent)
     stack_->addWidget(detail);
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 12, 12, 0);
+    layout->setContentsMargins(8, 6, 8, 0);
+    layout->setSpacing(4);
     layout->addLayout(modes);
-    layout->addWidget(hint);
     layout->addWidget(stack_, 1);
 
     clickTimer_ = new QTimer(this);
@@ -410,8 +432,7 @@ void MusicView::ensureSection(int page)
             setCountCell(artists_, i, 2, artist.tracks);
         }
         artists_->setUpdatesEnabled(true);
-        artists_->setSortingEnabled(true);
-        artists_->sortByColumn(0, Qt::AscendingOrder);
+        keepSort(artists_, 0);
         artistsReady_ = true;
     } else if (page == 2 && !songsReady_) {
         rebuildBrowser();
@@ -429,8 +450,7 @@ void MusicView::ensureSection(int page)
             setCountCell(genres_, i, 1, genre.tracks);
         }
         genres_->setUpdatesEnabled(true);
-        genres_->setSortingEnabled(true);
-        genres_->sortByColumn(0, Qt::AscendingOrder);
+        keepSort(genres_, 0);
         genresReady_ = true;
     }
 }
@@ -555,11 +575,8 @@ void MusicView::rebuildBrowser()
     fillCombo(albumFilter_, namesOf(albums), albumPick_, QStringLiteral("All albums"));
 
     const int scroll = table_->verticalScrollBar()->value();
-    const int sortColumn = table_->horizontalHeader()->sortIndicatorSection();
-    const Qt::SortOrder sortOrder = table_->horizontalHeader()->sortIndicatorOrder();
     tracks_->setTracks(shown);
-    if (sortColumn >= 0)
-        table_->sortByColumn(sortColumn, sortOrder);
+    reapplySort(table_);
     table_->verticalScrollBar()->setValue(scroll);
     songsReady_ = true;
 }
@@ -568,6 +585,10 @@ void MusicView::showTracks(const QList<Track> &list, const QString &heading, boo
 {
     detailTitle_->setText(heading);
     detailModel_->setTracks(list);
-    detailTable_->sortByColumn(albumMode ? 1 : 2, Qt::AscendingOrder);
+    {
+        const QSignalBlocker block(detailTable_->horizontalHeader());
+        detailTable_->horizontalHeader()->setSortIndicator(albumMode ? 1 : 2, Qt::AscendingOrder);
+    }
+    reapplySort(detailTable_);
     stack_->setCurrentIndex(4);
 }

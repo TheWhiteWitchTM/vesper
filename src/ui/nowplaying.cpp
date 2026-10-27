@@ -3,11 +3,13 @@
 #include "artloader.h"
 #include "library.h"
 #include "player.h"
+#include "ui/stage.h"
 
 #include <QLabel>
 #include <QListWidget>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -72,6 +74,12 @@ NowPlaying::NowPlaying(Library *library, Player *player, QWidget *parent)
     art_ = new QLabel;
     art_->setFixedSize(300, 300);
     art_->setAlignment(Qt::AlignCenter);
+    stage_ = new WitchStage(player_);
+    stage_->setFixedSize(300, 300);
+    artStack_ = new QStackedWidget;
+    artStack_->setFixedSize(300, 300);
+    artStack_->addWidget(art_);
+    artStack_->addWidget(stage_);
 
     title_ = new QLabel(QStringLiteral("Nothing playing"));
     title_->setObjectName(QStringLiteral("hero"));
@@ -98,7 +106,7 @@ NowPlaying::NowPlaying(Library *library, Player *player, QWidget *parent)
     auto *row = new QHBoxLayout;
     row->setContentsMargins(36, 28, 36, 24);
     row->setSpacing(36);
-    row->addWidget(art_, 0, Qt::AlignTop);
+    row->addWidget(artStack_, 0, Qt::AlignTop);
     row->addLayout(text, 1);
     setLayout(row);
 
@@ -125,6 +133,8 @@ void NowPlaying::syncTrack(const Track &track)
         detail_->clear();
         overview_->clear();
         art_->setPixmap(ArtLoader::instance()->image({}, QStringLiteral("empty"), QStringLiteral("V"), QSize(300, 300), false));
+        if (artStack_)
+            artStack_->setCurrentWidget(art_);
         loadLyrics({});
         return;
     }
@@ -149,6 +159,10 @@ void NowPlaying::syncTrack(const Track &track)
     overview_->setVisible(!fresh.overview.trimmed().isEmpty());
     const QPixmap art = ArtLoader::instance()->image(fresh.artwork, fresh.path, fresh.displayTitle(), QSize(300, 300), fresh.isVideo());
     art_->setPixmap(art);
+    if (artStack_)
+        artStack_->setCurrentWidget(!fresh.isVideo() && stage_ ? static_cast<QWidget *>(stage_) : static_cast<QWidget *>(art_));
+    if (stage_ && !fresh.isVideo())
+        stage_->setCover(art.scaled(72, 72, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
     loadLyrics(fresh.lyrics);
 }
 

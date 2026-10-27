@@ -17,7 +17,10 @@
 #include "ui/organizedialog.h"
 #include "ui/playlistview.h"
 #include "ui/queueview.h"
+#include "ui/radioview.h"
 #include "ui/settingsview.h"
+#include "ui/youtubeview.h"
+#include "ui/stage.h"
 #include "ui/trackmodel.h"
 #include "ui/transport.h"
 #include "ui/videoview.h"
@@ -26,7 +29,9 @@
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QAbstractItemView>
+#include <QAction>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
@@ -45,14 +50,23 @@
 #include <QFrame>
 #include <QFontMetrics>
 #include <QFormLayout>
+#include <QEnterEvent>
+#include <QEasingCurve>
 #include <QHideEvent>
 #include <QHBoxLayout>
+#include <QMouseEvent>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPen>
+#include <QPointer>
+#include <QThread>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QVariantAnimation>
+#include <QtConcurrent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -65,6 +79,7 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QScrollArea>
@@ -72,50 +87,51 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStyleHints>
 #include <QStandardPaths>
 #include <QSystemTrayIcon>
 #include <QTableView>
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTimer>
+#include <QToolButton>
 
 class ScanRing : public QWidget {
 public:
     explicit ScanRing(QWidget *parent = nullptr)
         : QWidget(parent)
     {
-        setFixedSize(28, 28);
-        setMouseTracking(true);
-        setCursor(Qt::ArrowCursor);
+        setFixedSize(26, 26);
+        setCursor(Qt::PointingHandCursor);
+        spin_ = new QTimer(this);
+        spin_->setInterval(50);
+        connect(spin_, &QTimer::timeout, this, [this] {
+            angle_ = (angle_ + 6) % 360;
+            update();
+        });
     }
+
+    void setClick(std::function<void()> click) { click_ = std::move(click); }
 
     void setPercent(int percent)
     {
-        percent_ = percent;
-        update();
-    }
-
-    void setDetail(const QString &detail)
-    {
-        detail_ = detail;
-        if (underMouse())
-            showCard();
-        else
-            hideDetail();
-    }
-
-    void hideDetail()
-    {
-        if (card_)
-            card_->hide();
-    }
-
-    void advance()
-    {
-        if (percent_ >= 0)
+        if (percent_ == percent)
             return;
-        angle_ = (angle_ + 14) % 360;
+        percent_ = percent;
+        if (isVisible())
+            syncSpin();
         update();
+    }
+
+    // Shows the circle. The widget size never changes, and its layout slot
+    // stays reserved while it is hidden, so the search field does not reflow.
+    void reveal()
+    {
+        const bool was = isVisible();
+        show();
+        syncSpin();
+        if (!was)
+            pop();
     }
 
 protected:
@@ -123,15 +139,18 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        const QRectF ring = QRectF(rect()).adjusted(5, 5, -5, -5);
-        QPen pen(QColor(QStringLiteral("#7a6854")), 2.2, Qt::SolidLine, Qt::RoundCap);
+        painter.translate(rect().center());
+        painter.scale(pop_, pop_);
+        painter.translate(-rect().center());
+        const QRectF ring = QRectF(rect()).adjusted(6, 6, -6, -6);
+        QPen pen(QColor(QStringLiteral("#6e5e4c")), 2.0, Qt::SolidLine, Qt::RoundCap);
         painter.setPen(pen);
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(ring);
         pen.setColor(QColor(QStringLiteral("#e4b15a")));
         painter.setPen(pen);
         if (percent_ < 0) {
-            painter.drawArc(ring, angle_ * 16, 80 * 16);
+            painter.drawArc(ring, angle_ * 16, 70 * 16);
             return;
         }
         if (percent_ <= 0)
@@ -140,65 +159,377 @@ protected:
         painter.drawArc(ring, 90 * 16, -span);
     }
 
-    void enterEvent(QEnterEvent *event) override
+    void mouseReleaseEvent(QMouseEvent *event) override
     {
-        QWidget::enterEvent(event);
-        showCard();
-    }
-
-    void leaveEvent(QEvent *event) override
-    {
-        hideDetail();
-        QWidget::leaveEvent(event);
+        if (event->button() == Qt::LeftButton && click_)
+            click_();
+        QWidget::mouseReleaseEvent(event);
     }
 
     void hideEvent(QHideEvent *event) override
     {
-        hideDetail();
+        if (spin_)
+            spin_->stop();
+        if (popAnim_)
+            popAnim_->stop();
+        pop_ = 1;
         QWidget::hideEvent(event);
     }
 
 private:
-    void showCard()
+    void syncSpin()
     {
-        if (detail_.trimmed().isEmpty())
+        if (!spin_)
             return;
-        if (!card_) {
-            card_ = new QLabel(this, Qt::ToolTip);
-            card_->setObjectName(QStringLiteral("scanDetail"));
-            card_->setWordWrap(true);
-            card_->setAttribute(Qt::WA_TransparentForMouseEvents);
-            card_->setStyleSheet(QStringLiteral(
-                "QLabel { background: #2a241e; color: #f3eee6; border: 1px solid #4a4036;"
-                " border-radius: 8px; padding: 8px 10px; font-size: 10.5pt; }"));
+        if (percent_ < 0) {
+            if (!spin_->isActive())
+                spin_->start();
+        } else {
+            spin_->stop();
         }
-        card_->setFixedWidth(420);
-        card_->setText(detail_);
-        card_->adjustSize();
-        QPoint pos = mapToGlobal(QPoint(width() - card_->width(), height() + 6));
-        if (QScreen *screen = this->screen()) {
-            const QRect avail = screen->availableGeometry();
-            if (pos.x() < avail.left() + 8)
-                pos.setX(avail.left() + 8);
-            if (pos.x() + card_->width() > avail.right() - 8)
-                pos.setX(qMax(avail.left() + 8, avail.right() - card_->width() - 8));
-            if (pos.y() + card_->height() > avail.bottom() - 8)
-                pos.setY(qMax(avail.top() + 8, mapToGlobal(QPoint(0, 0)).y() - card_->height() - 6));
-        }
-        card_->move(pos);
-        card_->show();
-        card_->raise();
     }
 
-    int percent_ = 0;
+    void pop()
+    {
+        if (popAnim_)
+            popAnim_->stop();
+        pop_ = 0.45;
+        auto *anim = new QVariantAnimation(this);
+        popAnim_ = anim;
+        anim->setStartValue(0.45);
+        anim->setEndValue(1.0);
+        anim->setDuration(280);
+        anim->setEasingCurve(QEasingCurve::OutBack);
+        connect(anim, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            pop_ = value.toReal();
+            update();
+        });
+        connect(anim, &QVariantAnimation::finished, this, [this, anim] {
+            if (popAnim_ == anim)
+                popAnim_ = nullptr;
+            pop_ = 1;
+            anim->deleteLater();
+            update();
+        });
+        anim->start();
+    }
+
+    int percent_ = -1;
     int angle_ = 90;
-    QString detail_;
-    QLabel *card_ = nullptr;
+    qreal pop_ = 1;
+    QTimer *spin_ = nullptr;
+    QVariantAnimation *popAnim_ = nullptr;
+    std::function<void()> click_;
 };
+
+struct ScanPop {
+    QFrame *frame = nullptr;
+    QLabel *title = nullptr;
+    QLabel *line = nullptr;
+    QLabel *file = nullptr;
+    QPushButton *stop = nullptr;
+};
+
+// Bar between the library and the player. Drag resizes the picture.
+// Up hides the player, down brings it back, and the last button is full screen.
+// The bar stays on screen until the picture itself is really full screen.
+class PlayerGrip : public QWidget {
+public:
+    explicit PlayerGrip(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("playerGrip"));
+        setAttribute(Qt::WA_StyledBackground, true);
+        setFixedHeight(36);
+        setCursor(Qt::SizeVerCursor);
+        setMouseTracking(true);
+        setToolTip(QStringLiteral("Drag to resize the picture. Double-click the picture for full screen."));
+
+        up_ = makeButton(Icons::chevron(false, ink()), QStringLiteral("Hide the player"));
+        down_ = makeButton(Icons::chevron(true, ink()), QStringLiteral("Show the player"));
+        full_ = makeButton(Icons::fullscreen(ink()), QStringLiteral("Full screen"));
+
+        auto *row = new QHBoxLayout(this);
+        row->setContentsMargins(10, 2, 10, 4);
+        row->setSpacing(4);
+        row->addStretch(1);
+        row->addWidget(up_);
+        row->addWidget(down_);
+        row->addWidget(full_);
+        row->addStretch(1);
+
+        connect(up_, &QToolButton::clicked, this, [this] {
+            if (onHide_)
+                onHide_();
+        });
+        connect(down_, &QToolButton::clicked, this, [this] {
+            if (onShow_)
+                onShow_();
+        });
+        connect(full_, &QToolButton::clicked, this, [this] {
+            if (onFull_)
+                onFull_();
+        });
+        setCollapsed(false);
+        setFullscreen(false);
+    }
+
+    void setCollapsed(bool on)
+    {
+        up_->setIcon(Icons::chevron(false, on ? dim() : ink()));
+        down_->setIcon(Icons::chevron(true, on ? ink() : dim()));
+    }
+
+    void setFullscreen(bool on)
+    {
+        full_->setIcon(on ? Icons::fullscreenExit(ink()) : Icons::fullscreen(ink()));
+        full_->setToolTip(on ? QStringLiteral("Leave full screen") : QStringLiteral("Full screen"));
+    }
+
+    void setHide(std::function<void()> fn) { onHide_ = std::move(fn); }
+    void setShow(std::function<void()> fn) { onShow_ = std::move(fn); }
+    void setFullscreenToggle(std::function<void()> fn) { onFull_ = std::move(fn); }
+    void setDrag(std::function<void()> start, std::function<void(int)> move, std::function<void()> done)
+    {
+        onPress_ = std::move(start);
+        onDrag_ = std::move(move);
+        onDrop_ = std::move(done);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QWidget::paintEvent(event);
+        QPainter painter(this);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#c9963a")));
+        painter.drawRect(0, height() - 2, width(), 2);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            // A press on the arrows or the full-screen button is not a drag.
+            if (QWidget *child = childAt(event->position().toPoint())) {
+                if (child != this) {
+                    QWidget::mousePressEvent(event);
+                    return;
+                }
+            }
+            dragging_ = true;
+            lastY_ = qRound(event->globalPosition().y());
+            grabMouse();
+            if (onPress_)
+                onPress_();
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (dragging_) {
+            const int y = qRound(event->globalPosition().y());
+            const int dy = lastY_ - y;
+            lastY_ = y;
+            if (dy != 0 && onDrag_)
+                onDrag_(dy);
+            event->accept();
+            return;
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (dragging_ && event->button() == Qt::LeftButton) {
+            dragging_ = false;
+            releaseMouse();
+            if (onDrop_)
+                onDrop_();
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    static QColor ink() { return QColor(QStringLiteral("#140e08")); }
+    static QColor dim() { return QColor(QStringLiteral("#f0d7a4")); }
+
+    static QToolButton *makeButton(const QIcon &icon, const QString &tip)
+    {
+        auto *button = new QToolButton;
+        button->setObjectName(QStringLiteral("gripBtn"));
+        button->setIcon(icon);
+        button->setIconSize(QSize(18, 18));
+        button->setFixedSize(28, 28);
+        button->setToolTip(tip);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setAutoRaise(true);
+        return button;
+    }
+
+    QToolButton *up_ = nullptr;
+    QToolButton *down_ = nullptr;
+    QToolButton *full_ = nullptr;
+    bool dragging_ = false;
+    int lastY_ = 0;
+    std::function<void()> onHide_;
+    std::function<void()> onShow_;
+    std::function<void()> onFull_;
+    std::function<void()> onPress_;
+    std::function<void(int)> onDrag_;
+    std::function<void()> onDrop_;
+};
+
+void setLabelText(QLabel *label, const QString &text)
+{
+    if (label && label->text() != text)
+        label->setText(text);
+}
+
+QString timeLeft(qint64 ms)
+{
+    if (ms < 5000)
+        return QStringLiteral("a few seconds left");
+    const qint64 sec = (ms + 999) / 1000;
+    if (sec < 60)
+        return QStringLiteral("%1 sec left").arg(qMax(qint64(5), (sec / 5) * 5));
+    const qint64 min = (sec + 30) / 60;
+    if (min < 60)
+        return QStringLiteral("%1 min left").arg(qMax(qint64(1), min));
+    const qint64 hr = min / 60;
+    const qint64 rem = min % 60;
+    if (rem == 0)
+        return QStringLiteral("%1 hr left").arg(hr);
+    return QStringLiteral("%1 hr %2 min left").arg(hr).arg(rem);
+}
+
+QString scanSummary(const Scanner::Progress &progress, bool compact)
+{
+    if (progress.percent < 0) {
+        return progress.done > 0 ? QStringLiteral("Counting · %1 files").arg(progress.done)
+                                  : QStringLiteral("Counting");
+    }
+    const int percent = qBound(0, progress.percent, 100);
+    QString line = QStringLiteral("%1%").arg(percent);
+    if (!compact && progress.total > 0)
+        line += QStringLiteral(" · %1 of %2").arg(progress.done).arg(progress.total);
+    if (percent < 100 && progress.startedMs > 0 && progress.done > 0 && progress.total > progress.done) {
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - progress.startedMs;
+        if (elapsed >= 1500) {
+            const qint64 left = elapsed * qint64(progress.total - progress.done) / qint64(progress.done);
+            line += QStringLiteral(" · ") + timeLeft(left);
+        }
+    }
+    return line;
+}
+
+void applyScanPop(ScanPop *pop, const Scanner::Progress &progress)
+{
+    if (!pop || !pop->frame)
+        return;
+    setLabelText(pop->title, QStringLiteral("Scanning"));
+    const QString line = scanSummary(progress, false);
+    const QFontMetrics lineMetrics(pop->line->font());
+    setLabelText(pop->line, lineMetrics.elidedText(line, Qt::ElideMiddle, 300));
+    pop->line->setToolTip(line);
+    const QFontMetrics fileMetrics(pop->file->font());
+    setLabelText(pop->file, fileMetrics.elidedText(progress.file, Qt::ElideMiddle, 300));
+    if (pop->stop && !pop->stop->isVisible())
+        pop->stop->show();
+}
+
+void applyScanNote(ScanPop *pop, const QString &note)
+{
+    if (!pop || !pop->frame)
+        return;
+    const QString text = note.trimmed().isEmpty() ? QStringLiteral("Working") : note.trimmed();
+    const int split = text.indexOf(QLatin1Char('\n'));
+    const QString head = split < 0 ? text : text.left(split);
+    const QString rest = split < 0 ? QString() : text.mid(split + 1).trimmed();
+    const QFontMetrics headMetrics(pop->title->font());
+    setLabelText(pop->title, headMetrics.elidedText(head, Qt::ElideMiddle, 300));
+    pop->title->setToolTip(head);
+    const QFontMetrics lineMetrics(pop->line->font());
+    setLabelText(pop->line, rest.isEmpty() ? QString() : lineMetrics.elidedText(rest, Qt::ElideMiddle, 300));
+    pop->line->setToolTip(rest);
+    setLabelText(pop->file, {});
+    if (pop->stop)
+        pop->stop->hide();
+}
+
+namespace {
+
+void writePlaybackAsync(const QString &dbPath, qint64 id, qint64 positionMs, bool countPlay)
+{
+    const QString conn = QStringLiteral("vesper-pos-%1").arg(quint64(QThread::currentThreadId()));
+    {
+        QSqlDatabase db = QSqlDatabase::contains(conn)
+            ? QSqlDatabase::database(conn)
+            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        if (!db.isOpen()) {
+            db.setDatabaseName(dbPath);
+            if (!db.open())
+                return;
+            QSqlQuery pragma(db);
+            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            pragma.exec(QStringLiteral("PRAGMA busy_timeout=8000"));
+        }
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral(
+            "UPDATE tracks SET position_ms=?, last_played=?, play_count=play_count+? WHERE id=?"));
+        q.addBindValue(positionMs);
+        q.addBindValue(QDateTime::currentSecsSinceEpoch());
+        q.addBindValue(countPlay ? 1 : 0);
+        q.addBindValue(id);
+        q.exec();
+    }
+}
+
+void writeProbeAsync(const QString &dbPath, qint64 id, qint64 durationMs, int width, int height)
+{
+    if (dbPath.isEmpty() || id <= 0)
+        return;
+    const QString conn = QStringLiteral("vesper-probe-%1").arg(quint64(QThread::currentThreadId()));
+    {
+        QSqlDatabase db = QSqlDatabase::contains(conn)
+            ? QSqlDatabase::database(conn)
+            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        if (!db.isOpen()) {
+            db.setDatabaseName(dbPath);
+            if (!db.open())
+                return;
+            QSqlQuery pragma(db);
+            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            pragma.exec(QStringLiteral("PRAGMA busy_timeout=2000"));
+            pragma.exec(QStringLiteral("PRAGMA wal_autocheckpoint=0"));
+        }
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral(
+            "UPDATE tracks SET "
+            "duration_ms=CASE WHEN ?>0 THEN ? ELSE duration_ms END, "
+            "width=CASE WHEN ?>0 THEN ? ELSE width END, "
+            "height=CASE WHEN ?>0 THEN ? ELSE height END WHERE id=?"));
+        q.addBindValue(durationMs);
+        q.addBindValue(durationMs);
+        q.addBindValue(width);
+        q.addBindValue(width);
+        q.addBindValue(height);
+        q.addBindValue(height);
+        q.addBindValue(id);
+        q.exec();
+    }
+}
+
+} // namespace
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
 #include <random>
 
 namespace {
@@ -216,6 +547,9 @@ QList<Track> rowsOf(QAbstractItemModel *model)
 }
 
 } // namespace
+
+constexpr int kPageRadio = 9;
+constexpr int kPageYoutube = 10;
 
 MainWindow::MainWindow(const QStringList &paths, QWidget *parent)
     : QMainWindow(parent)
@@ -309,6 +643,8 @@ MainWindow::~MainWindow()
             scanner_->wait(5000);
         }
     }
+    delete scanPop_;
+    scanPop_ = nullptr;
     if (prober_)
         prober_->shutdown();
     // Callbacks still point at the video widget, which dies with the window afterwards.
@@ -363,6 +699,7 @@ void MainWindow::buildUi()
         button->setIconSize(QSize(18, 18));
         button->setMinimumHeight(42);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setProperty("page", page);
         nav_.append(button);
         navLayout->addWidget(button);
         connect(button, &QPushButton::clicked, this, [this, page] { showPage(page); });
@@ -372,6 +709,14 @@ void MainWindow::buildUi()
     addNav(QStringLiteral("Videos"), Icons::video(), 2);
     addNav(QStringLiteral("Playlists"), Icons::playlist(), 3);
     addNav(QStringLiteral("Queue"), Icons::queue(), 4);
+    navLayout->addSpacing(6);
+    auto *navRule = new QFrame;
+    navRule->setObjectName(QStringLiteral("navRule"));
+    navRule->setFixedHeight(1);
+    navLayout->addWidget(navRule);
+    navLayout->addSpacing(6);
+    addNav(QStringLiteral("Radio"), Icons::radio(), kPageRadio);
+    addNav(QStringLiteral("YouTube"), Icons::youtube(), kPageYoutube);
     navLayout->addStretch();
 
     auto *scroll = new QScrollArea;
@@ -388,23 +733,33 @@ void MainWindow::buildUi()
     col->setContentsMargins(0, 0, 0, 0);
     col->setSpacing(0);
 
-    header_ = new QWidget;
-    header_->setObjectName(QStringLiteral("header"));
-    header_->setFixedHeight(68);
-    auto *head = new QHBoxLayout(header_);
-    head->setContentsMargins(18, 12, 18, 12);
-    head->setSpacing(10);
     search_ = new QLineEdit;
     search_->setObjectName(QStringLiteral("searchBox"));
-    search_->setPlaceholderText(QStringLiteral("Search music and video"));
+    search_->setPlaceholderText(QStringLiteral("Search"));
     search_->setClearButtonEnabled(true);
-    scanRing_ = new ScanRing(header_);
+    search_->setFixedSize(260, 26);
+    search_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    scanRing_ = new ScanRing;
+    // The slot stays in the menu bar while the ring is hidden. Showing it
+    // then does not change the corner width, so the search field does not jump.
+    QSizePolicy scanPolicy = scanRing_->sizePolicy();
+    scanPolicy.setRetainSizeWhenHidden(true);
+    scanRing_->setSizePolicy(scanPolicy);
     scanRing_->hide();
-    scanSpin_ = new QTimer(this);
-    scanSpin_->setInterval(40);
-    connect(scanSpin_, &QTimer::timeout, this, [this] {
-        if (scanRing_)
-            scanRing_->advance();
+    scanRing_->setClick([this] { toggleScanPop(); });
+    scanPoll_ = new QTimer(this);
+    scanPoll_->setInterval(200);
+    connect(scanPoll_, &QTimer::timeout, this, [this] {
+        if (!scanning_ || !scanner_ || !scanRing_)
+            return;
+        const Scanner::Progress snap = scanner_->progressSnapshot();
+        scanRing_->setPercent(snap.percent);
+        const QString full = scanSummary(snap, false);
+        if (scanRing_->toolTip() != full)
+            scanRing_->setToolTip(full);
+        syncScanLine(snap.percent, full);
+        if (scanPop_ && scanPop_->frame && scanPop_->frame->isVisible())
+            applyScanPop(scanPop_, snap);
     });
     busyBar_ = new QProgressBar;
     busyBar_->setObjectName(QStringLiteral("busyBar"));
@@ -415,19 +770,30 @@ void MainWindow::buildUi()
     status_ = new QLabel;
     status_->setObjectName(QStringLiteral("statusLabel"));
     status_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    status_->setMinimumWidth(120);
-    status_->setMaximumWidth(240);
+    status_->setFixedHeight(26);
+    status_->setFixedWidth(180);
     status_->setWordWrap(false);
-    cancelScan_ = new QPushButton(QStringLiteral("Cancel scan"));
-    cancelScan_->hide();
-    auto *openButton = new QPushButton(QStringLiteral("Open"));
-    head->addWidget(search_, 3);
-    head->addWidget(scanRing_);
-    head->addWidget(busyBar_);
-    head->addWidget(status_, 2);
-    head->addWidget(cancelScan_);
-    head->addWidget(openButton);
-    col->addWidget(header_);
+    status_->hide();
+    auto *menuTools = new QWidget;
+    menuTools->setObjectName(QStringLiteral("menuTools"));
+    auto *tools = new QHBoxLayout(menuTools);
+    tools->setContentsMargins(8, 0, 4, 0);
+    tools->setSpacing(6);
+    tools->addStretch(1);
+    tools->addWidget(status_);
+    tools->addWidget(busyBar_);
+    tools->addWidget(search_);
+    tools->addWidget(scanRing_);
+    menuBar()->setCornerWidget(menuTools, Qt::TopRightCorner);
+
+    scanLine_ = new QProgressBar;
+    scanLine_->setObjectName(QStringLiteral("scanLine"));
+    scanLine_->setTextVisible(false);
+    scanLine_->setFixedHeight(2);
+    scanLine_->setRange(0, 100);
+    scanLine_->setValue(0);
+    scanLine_->hide();
+    col->addWidget(scanLine_);
 
     banner_ = new QLabel;
     banner_->setObjectName(QStringLiteral("banner"));
@@ -443,6 +809,8 @@ void MainWindow::buildUi()
     queuePage_ = new QueueView(player_);
     now_ = new NowPlaying(library_, player_);
     settingsView_ = new SettingsView(library_, settings_, player_);
+    radio_ = new RadioView(settings_, player_);
+    youtube_ = new YoutubeView(settings_, player_);
 
     searchModel_ = new TrackModel(this);
     auto *searchProxy = new TrackProxy(this);
@@ -457,7 +825,8 @@ void MainWindow::buildUi()
     searchTable_->setSortingEnabled(true);
     searchTable_->verticalHeader()->hide();
     searchTable_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    searchTable_->verticalHeader()->setDefaultSectionSize(38);
+    searchTable_->verticalHeader()->setMinimumSectionSize(28);
+    searchTable_->verticalHeader()->setDefaultSectionSize(32);
     searchTable_->horizontalHeader()->setStretchLastSection(false);
     searchTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     searchTable_->setColumnWidth(0, 36);
@@ -470,10 +839,7 @@ void MainWindow::buildUi()
     searchTable_->setContextMenuPolicy(Qt::CustomContextMenu);
     auto *searchPage = new QWidget;
     auto *searchLayout = new QVBoxLayout(searchPage);
-    searchLayout->setContentsMargins(22, 18, 22, 12);
-    auto *searchTitle = new QLabel(QStringLiteral("Search"));
-    searchTitle->setObjectName(QStringLiteral("section"));
-    searchLayout->addWidget(searchTitle);
+    searchLayout->setContentsMargins(8, 4, 8, 0);
     searchLayout->addWidget(searchTable_, 1);
 
     auto *theater = new QWidget;
@@ -491,6 +857,8 @@ void MainWindow::buildUi()
     stack_->addWidget(settingsView_);
     stack_->addWidget(theater);
     stack_->addWidget(searchPage);
+    stack_->addWidget(radio_);
+    stack_->addWidget(youtube_);
     col->addWidget(stack_, 1);
 
     resumeBar_ = new QWidget;
@@ -507,11 +875,17 @@ void MainWindow::buildUi()
     resumeBar_->hide();
     col->addWidget(resumeBar_);
 
+    playerGrip_ = new PlayerGrip;
+    col->addWidget(playerGrip_);
+
+    dockHeight_ = settings_->dockHeight();
     miniDock_ = new QWidget;
     miniDock_->setObjectName(QStringLiteral("miniDock"));
-    miniDock_->setFixedHeight(188);
+    miniDock_->setFixedHeight(dockHeight_);
     dockLayout_ = new QVBoxLayout(miniDock_);
     dockLayout_->setContentsMargins(0, 0, 0, 0);
+    dockStage_ = new WitchStage(player_, miniDock_);
+    dockStage_->hide();
     miniDock_->hide();
     col->addWidget(miniDock_);
 
@@ -545,22 +919,60 @@ void MainWindow::buildUi()
             return;
         player_->playDisplayed(playList_->row(item));
     });
+    auto *railFoot = new QWidget(playRail_);
+    railFoot->setObjectName(QStringLiteral("playRailFoot"));
+    auto *footRow = new QHBoxLayout(railFoot);
+    footRow->setContentsMargins(10, 8, 10, 10);
+    footRow->setSpacing(8);
+    railRadio_ = new QPushButton(QStringLiteral("Radio"), railFoot);
+    railYoutube_ = new QPushButton(QStringLiteral("YouTube"), railFoot);
+    railRadio_->setObjectName(QStringLiteral("railTab"));
+    railYoutube_->setObjectName(QStringLiteral("railTab"));
+    railRadio_->setCheckable(true);
+    railYoutube_->setCheckable(true);
+    railRadio_->setAutoExclusive(false);
+    railYoutube_->setAutoExclusive(false);
+    railRadio_->setCursor(Qt::PointingHandCursor);
+    railYoutube_->setCursor(Qt::PointingHandCursor);
+    footRow->addWidget(railRadio_, 1);
+    footRow->addWidget(railYoutube_, 1);
+    railLayout->addWidget(railFoot);
+    connect(railRadio_, &QPushButton::clicked, this, [this] { showPage(kPageRadio); });
+    connect(railYoutube_, &QPushButton::clicked, this, [this] { showPage(kPageYoutube); });
 
     setCentralWidget(root);
     root->setMouseTracking(true);
     stack_->setMouseTracking(true);
 
-    connect(openButton, &QPushButton::clicked, this, [this] {
-        const QStringList files = QFileDialog::getOpenFileNames(
-            this, QStringLiteral("Open"), QDir::homePath(),
-            QStringLiteral("Media (*.mp3 *.flac *.ogg *.opus *.m4a *.aac *.wav *.mp4 *.mkv *.webm *.avi *.mov *.m4v);;All files (*)"));
-        if (!files.isEmpty())
-            openPaths(files);
-    });
-    connect(cancelScan_, &QPushButton::clicked, this, [this] {
+    scanPop_ = new ScanPop;
+    scanPop_->frame = new QFrame(root);
+    scanPop_->frame->setObjectName(QStringLiteral("scanPop"));
+    scanPop_->frame->setAttribute(Qt::WA_StyledBackground, true);
+    scanPop_->frame->setFixedSize(340, 132);
+    scanPop_->frame->hide();
+    auto *popLayout = new QVBoxLayout(scanPop_->frame);
+    popLayout->setContentsMargins(14, 12, 14, 12);
+    popLayout->setSpacing(4);
+    scanPop_->title = new QLabel(QStringLiteral("Scanning"), scanPop_->frame);
+    scanPop_->title->setObjectName(QStringLiteral("titleLabel"));
+    scanPop_->line = new QLabel(scanPop_->frame);
+    scanPop_->line->setObjectName(QStringLiteral("muted"));
+    scanPop_->line->setFixedHeight(22);
+    scanPop_->file = new QLabel(scanPop_->frame);
+    scanPop_->file->setObjectName(QStringLiteral("muted"));
+    scanPop_->file->setFixedHeight(22);
+    scanPop_->stop = new QPushButton(QStringLiteral("Stop"), scanPop_->frame);
+    scanPop_->stop->setCursor(Qt::PointingHandCursor);
+    popLayout->addWidget(scanPop_->title);
+    popLayout->addWidget(scanPop_->line);
+    popLayout->addWidget(scanPop_->file);
+    popLayout->addWidget(scanPop_->stop, 0, Qt::AlignLeft);
+
+    connect(scanPop_->stop, &QPushButton::clicked, this, [this] {
         if (scanner_)
             scanner_->requestCancel();
-        setStatus(QStringLiteral("Stopping the scan…"), true);
+        if (scanPop_ && scanPop_->line)
+            scanPop_->line->setText(QStringLiteral("Stopping…"));
     });
     connect(resumeButton, &QPushButton::clicked, this, [this] {
         const qint64 pos = resumePos_;
@@ -597,7 +1009,8 @@ void MainWindow::wire()
             return;
         }
         const bool over = (sidebar_ && sidebar_->underMouse())
-            || (header_ && header_->underMouse())
+            || (menuBar() && menuBar()->underMouse())
+            || (playerGrip_ && playerGrip_->underMouse())
             || (transport_ && transport_->underMouse())
             || (resumeBar_ && resumeBar_->isVisible() && resumeBar_->underMouse());
         if (over) {
@@ -642,15 +1055,20 @@ void MainWindow::wire()
     playRailTimer_->setInterval(420);
     connect(playRailTimer_, &QTimer::timeout, this, &MainWindow::hidePlayRail);
 
+    // Mouse-move events never arrive for a list that is not tracking the mouse,
+    // so the corner playlist is checked from the cursor position.
+    auto *cursorPoll = new QTimer(this);
+    cursorPoll->setInterval(90);
+    connect(cursorPoll, &QTimer::timeout, this, &MainWindow::checkHoverRail);
+    cursorPoll->start();
+
     videoClickTimer_ = new QTimer(this);
     videoClickTimer_->setSingleShot(true);
-    videoClickTimer_->setInterval(220);
-    connect(videoClickTimer_, &QTimer::timeout, this, [this] {
-        if (fullscreen_ || stack_->currentIndex() == 7)
-            player_->toggle();
-        else
-            showPage(7);
-    });
+    // Wait out the system's double-click gap. A shorter wait used to pause
+    // the film before the second click could take the picture full screen.
+    const int doubleClickMs = qMax(280, QApplication::styleHints()->mouseDoubleClickInterval());
+    videoClickTimer_->setInterval(doubleClickMs);
+    connect(videoClickTimer_, &QTimer::timeout, this, [this] { player_->toggle(); });
 
     auto shortcut = [this](const QKeySequence &keys, auto slot) {
         auto *cut = new QShortcut(keys, this);
@@ -666,13 +1084,6 @@ void MainWindow::wire()
     shortcut(Qt::Key_VolumeMute, [this] { player_->setMuted(!player_->isMuted()); });
     shortcut(Qt::Key_VolumeUp, [this] { player_->setVolume(player_->volume() + 5); });
     shortcut(Qt::Key_VolumeDown, [this] { player_->setVolume(player_->volume() - 5); });
-    shortcut(QKeySequence::Open, [this] {
-        const QStringList files = QFileDialog::getOpenFileNames(
-            this, QStringLiteral("Open"), QDir::homePath(),
-            QStringLiteral("Media (*.mp3 *.flac *.ogg *.opus *.m4a *.aac *.wav *.mp4 *.mkv *.webm *.avi *.mov *.m4v);;All files (*)"));
-        if (!files.isEmpty())
-            openPaths(files);
-    });
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_U), [this] {
         bool ok = false;
         const QString url = QInputDialog::getText(this, QStringLiteral("Open a stream"), QStringLiteral("Address"),
@@ -732,14 +1143,6 @@ void MainWindow::wire()
     connect(videos_, &VideoView::contextTracks, this, &MainWindow::showContext);
     connect(playlists_, &PlaylistView::contextTracks, this, &MainWindow::showContext);
 
-    auto addFolder = [this] {
-        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Add a folder"), QDir::homePath());
-        if (dir.isEmpty())
-            return;
-        const qint64 id = library_->addFolder(dir, true);
-        if (id > 0)
-            startScan({{id, cleanDirPath(dir)}});
-    };
     auto scanHome = [this] {
         const auto answer = QMessageBox::question(
             this, QStringLiteral("Scan home"),
@@ -749,7 +1152,7 @@ void MainWindow::wire()
         const QString home = QDir::homePath();
         const qint64 id = library_->addFolder(home, true);
         if (id > 0)
-            startScan({{id, home}});
+            startScan({{id, home}}, true);
     };
     auto scanComputer = [this] {
         QMessageBox box(this);
@@ -765,7 +1168,7 @@ void MainWindow::wire()
             return;
         const qint64 id = library_->addFolder(QStringLiteral("/"), false);
         if (id > 0)
-            startScan({{id, QStringLiteral("/")}});
+            startScan({{id, QStringLiteral("/")}}, true);
     };
     auto rescan = [this] {
         QList<QPair<qint64, QString>> roots;
@@ -775,12 +1178,12 @@ void MainWindow::wire()
             setStatus(QStringLiteral("Add a folder first"));
             return;
         }
-        startScan(roots);
+        startScan(roots, true);
     };
-    connect(home_, &HomeView::addFolder, this, addFolder);
+    connect(home_, &HomeView::addFolder, this, &MainWindow::addLibraryFolder);
     connect(home_, &HomeView::scanHome, this, scanHome);
     connect(home_, &HomeView::scanComputer, this, scanComputer);
-    connect(settingsView_, &SettingsView::addFolder, this, addFolder);
+    connect(settingsView_, &SettingsView::addFolder, this, &MainWindow::addLibraryFolder);
     connect(settingsView_, &SettingsView::scanHome, this, scanHome);
     connect(settingsView_, &SettingsView::scanComputer, this, scanComputer);
     connect(settingsView_, &SettingsView::rescan, this, rescan);
@@ -839,17 +1242,45 @@ void MainWindow::wire()
     });
 
     connect(transport_, &Transport::openCurrent, this, [this] {
-        showPage(player_->current().isVideo() ? 7 : 5);
+        const Track track = player_->current();
+        const bool movie = track.isVideo() && !track.onMusicShelf();
+        showPage(movie ? 7 : 5);
     });
     connect(transport_, &Transport::favoriteToggled, this, &MainWindow::toggleFavorite);
     connect(transport_, &Transport::moreRequested, this, &MainWindow::openMore);
+    playerFolded_ = settings_->playerFolded();
+    if (playerGrip_) {
+        playerGrip_->setHide([this] { setPlayerCollapsed(true); });
+        playerGrip_->setShow([this] { setPlayerCollapsed(false); });
+        playerGrip_->setFullscreenToggle([this] {
+            // A double-click on this button delivers two clicks. The first one
+            // already entered or left full screen, so the second is ignored.
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            const int gap = qMax(280, QApplication::styleHints()->mouseDoubleClickInterval());
+            if (now - gripToggleMs_ < gap)
+                return;
+            gripToggleMs_ = now;
+            setFullscreen(!fullscreen_, true);
+        });
+        playerGrip_->setDrag([this] { dragSlack_ = 0; },
+                             [this](int dy) { dragPlayer(dy); },
+                             [this] { finishPlayerDrag(); });
+    }
+    applyPlayerFold();
 
-    connect(video_, &VideoWidget::clicked, this, [this] { videoClickTimer_->start(); });
+    connect(video_, &VideoWidget::clicked, this, [this] {
+        if (QDateTime::currentMSecsSinceEpoch() - fsToggleMs_ < 450)
+            return;
+        videoClickTimer_->start();
+    });
     connect(video_, &VideoWidget::doubleClicked, this, [this] {
-        videoClickTimer_->stop();
+        if (videoClickTimer_)
+            videoClickTimer_->stop();
         setFullscreen(!fullscreen_, true);
     });
     connect(player_, &Player::videoAvailabilityChanged, this, [this] { placeVideo(); });
+    connect(player_, &Player::streamNeeded, youtube_, &YoutubeView::resolvePlayback);
+    connect(player_, &Player::trackChanged, youtube_, &YoutubeView::notePlayback);
     connect(player_, &Player::trackMetaChanged, this, [this](const Track &track) {
         if (track.path.isEmpty())
             return;
@@ -877,26 +1308,23 @@ void MainWindow::wire()
         if (tray_)
             tray_->setToolTip(track.displayTitle() + QLatin1Char('\n') + track.displayArtist());
         if (!restoring_) {
-            holdFullscreenOff_ = false;
-            if (track.path.isEmpty()) {
-                if (fullscreenAuto_)
-                    setFullscreen(false, false);
-            } else if (track.isVideo() && !mini_) {
-                fullscreenAuto_ = true;
-                setFullscreen(true, false);
-            } else if (!track.isVideo() && fullscreenAuto_) {
-                setFullscreen(false, false);
-            } else if (track.isVideo() && !mini_ && !fullscreen_) {
-                showPage(7);
-            } else if (!track.isVideo() && stack_->currentIndex() == 7 && !fullscreen_) {
+            // Full screen only when asked (F11, double-click, or the menu).
+            // A music video in a shuffle stays in the small dock.
+            const bool musicPiece = !track.isVideo() || track.onMusicShelf();
+            if (musicPiece && !fullscreen_ && stack_ && stack_->currentIndex() == 7)
                 showPage(lastLibraryPage_);
-            }
             notifyTrack(track);
         }
         considerResume(track);
         placeVideo();
     });
     connect(player_, &Player::stateChanged, this, [this](Player::State state) {
+        if (state == Player::State::Playing && playerFolded_ && !fullscreen_) {
+            const Track track = player_->current();
+            if (isStreamUrl(track.path))
+                setPlayerCollapsed(false);
+        }
+        placeVideo();
         if (!fullscreen_)
             return;
         if (state == Player::State::Playing)
@@ -912,10 +1340,16 @@ void MainWindow::wire()
         settings_->setRepeatMode(int(player_->repeatMode()));
         if (!playRail_)
             return;
-        if (!player_ || player_->queue().isEmpty())
-            hidePlayRail();
-        else if (playRail_->isVisible())
+        if (!player_ || player_->queue().isEmpty()) {
+            const QPoint local = centralWidget() ? centralWidget()->mapFromGlobal(QCursor::pos()) : QPoint();
+            const bool over = playRail_->isVisible() && playRail_->geometry().contains(local);
+            if (over)
+                syncPlayRail();
+            else
+                hidePlayRail();
+        } else if (playRail_->isVisible()) {
             syncPlayRail();
+        }
     });
     connect(player_, &Player::trackChanged, this, [this] {
         if (playRail_ && playRail_->isVisible())
@@ -968,26 +1402,46 @@ void MainWindow::wire()
     connect(scanner_, &Scanner::failed, this, [this](const QString &text) {
         setStatus(text);
     }, Qt::QueuedConnection);
-    connect(scanner_, &Scanner::progress, this, [this](int percent, const QString &detail) {
-        showActivity(QStringLiteral("scan"), percent, detail);
-    }, Qt::QueuedConnection);
     connect(scanner_, qOverload<bool>(&Scanner::finished), this, [this](bool cancelled) {
         scanning_ = false;
-        cancelScan_->hide();
-        clearActivity(QStringLiteral("scan"));
+        if (scanPoll_)
+            scanPoll_->stop();
+        if (scanLine_)
+            scanLine_->hide();
+        const bool leavePop = scanPinned_ && scanPop_ && scanPop_->frame && scanPop_->frame->isVisible();
+        if (!leavePop)
+            clearActivity(QStringLiteral("scan"));
+        else
+            activityOwner_.clear();
         if (viewReloadTimer_)
             viewReloadTimer_->stop();
         viewsDirty_ = 0xf;
-        QTimer::singleShot(0, this, [this, cancelled] {
+        QTimer::singleShot(0, this, [this, cancelled, leavePop] {
             if (scanning_)
                 return;
             reloadViews();
             const LibraryStats stats = library_->stats();
             const int count = stats.audio + stats.video;
-            setStatus(cancelled ? QStringLiteral("Scan stopped · %1 in the library").arg(count)
-                                : QStringLiteral("%1 in the library").arg(count));
-            if (settings_->fetchOnline())
-                metadata_->kick();
+            const QString text = cancelled ? QStringLiteral("Scan stopped · %1 in the library").arg(count)
+                                           : QStringLiteral("%1 in the library").arg(count);
+            if (leavePop && scanPop_ && scanPop_->frame && scanPop_->frame->isVisible()) {
+                setLabelText(scanPop_->title, cancelled ? QStringLiteral("Scan stopped")
+                                                         : QStringLiteral("Scan finished"));
+                setLabelText(scanPop_->line, text);
+                setLabelText(scanPop_->file, {});
+                if (scanPop_->stop)
+                    scanPop_->stop->hide();
+                scanNote_ = text;
+                if (scanRing_) {
+                    scanRing_->setPercent(cancelled ? -1 : 100);
+                    scanRing_->setToolTip(text);
+                    scanRing_->reveal();
+                }
+            } else {
+                setStatus(text);
+            }
+            if (metadata_)
+                metadata_->hold(false);
             QTimer::singleShot(600, this, [this] {
                 if (!scanning_ && namer_)
                     namer_->maybeRun();
@@ -995,7 +1449,14 @@ void MainWindow::wire()
         });
     }, Qt::QueuedConnection);
     connect(prober_, &Prober::probed, this, [this](qint64 id, qint64 duration, int width, int height) {
-        library_->updateProbe(id, duration, width, height);
+        const QString dbPath = dataDir() + QStringLiteral("/library.db");
+        (void)QtConcurrent::run([dbPath, id, duration, width, height] {
+            writeProbeAsync(dbPath, id, duration, width, height);
+        });
+        if (videos_)
+            videos_->noteProbe(id, duration);
+        if (searchModel_)
+            searchModel_->noteProbe(id, duration);
     });
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -1072,17 +1533,15 @@ void MainWindow::showPage(int page)
         search_->blockSignals(false);
     }
     stack_->setCurrentIndex(page);
-    for (QPushButton *button : nav_)
-        button->setAutoExclusive(false);
-    for (int i = 0; i < nav_.size(); ++i)
-        nav_.at(i)->setChecked(i == page);
-    for (QPushButton *button : nav_)
-        button->setAutoExclusive(true);
+    syncNav(page);
     if (!mini_)
         stack_->show();
     if (transport_)
         transport_->setShuffleContext(shuffleKind());
-    if (!videoSurface())
+    syncRailTabs();
+    const QPoint cursor = mapFromGlobal(QCursor::pos());
+    const bool atEdge = rect().contains(cursor) && cursor.x() >= width() - 40;
+    if (!atEdge)
         hidePlayRail();
     placeVideo();
     schedulePageLoad(page);
@@ -1092,26 +1551,66 @@ void MainWindow::placeVideo()
 {
     if (!video_ || !theaterLayout_ || !dockLayout_)
         return;
-    if (video_->parentWidget() && video_->parentWidget()->layout())
-        video_->parentWidget()->layout()->removeWidget(video_);
-    const bool theater = fullscreen_ || (stack_ && stack_->currentIndex() == 7);
+    auto takeOut = [](QWidget *widget) {
+        if (!widget || !widget->parentWidget() || !widget->parentWidget()->layout())
+            return;
+        widget->parentWidget()->layout()->removeWidget(widget);
+    };
+    takeOut(video_);
+    takeOut(dockStage_);
+    const int page = stack_ ? stack_->currentIndex() : -1;
+    const bool folded = playerFolded_ && !fullscreen_ && page != 7;
+    if (folded) {
+        if (dockStage_)
+            dockStage_->hide();
+        if (miniDock_)
+            miniDock_->hide();
+        if (video_)
+            video_->hide();
+        if (playRail_ && playRail_->isVisible())
+            playRail_->raise();
+        return;
+    }
+    const Track track = player_ ? player_->current() : Track{};
+    const bool musicPiece = !track.path.isEmpty() && (!track.isVideo() || track.onMusicShelf());
+    const bool audioStage = dockStage_ && player_ && !player_->hasVideo() && musicPiece
+        && (player_->state() == Player::State::Playing || player_->state() == Player::State::Paused);
+    // Page 7 is the big picture. Music, including a music video, stays in the
+    // dock unless this window was put in full screen on purpose.
+    const bool theater = fullscreen_ || (!musicPiece && stack_ && stack_->currentIndex() == 7);
     if (theater) {
         theaterLayout_->addWidget(video_);
+        if (dockStage_)
+            dockStage_->hide();
         miniDock_->hide();
         video_->show();
     } else if (player_ && player_->hasVideo()) {
         dockLayout_->addWidget(video_);
+        if (dockStage_)
+            dockStage_->hide();
         miniDock_->show();
         video_->show();
+    } else if (audioStage) {
+        video_->hide();
+        dockLayout_->addWidget(dockStage_);
+        dockStage_->show();
+        miniDock_->show();
     } else {
+        if (dockStage_)
+            dockStage_->hide();
         miniDock_->hide();
         video_->hide();
+    }
+    if (mini_) {
+        const int want = ((player_ && player_->hasVideo()) || audioStage) ? 400 : 210;
+        if (height() < want)
+            resize(qMax(width(), 460), want);
     }
     if (playRail_ && playRail_->isVisible())
         playRail_->raise();
 }
 
-void MainWindow::startScan(const QList<QPair<qint64, QString>> &rootsIn)
+void MainWindow::startScan(const QList<QPair<qint64, QString>> &rootsIn, bool pinDetail)
 {
     QList<Scanner::Root> roots;
     for (const auto &root : rootsIn) {
@@ -1123,15 +1622,26 @@ void MainWindow::startScan(const QList<QPair<qint64, QString>> &rootsIn)
         return;
     if (!scanner_->startScan(roots, {}, artworkDir(), settings_->skipNames(),
                              dataDir() + QStringLiteral("/library.db"))) {
-        setStatus(QStringLiteral("A scan is already running"));
+        pinScanPop();
         return;
     }
     scanning_ = true;
-    cancelScan_->show();
+    if (metadata_)
+        metadata_->hold(true);
+    scanNote_.clear();
+    activityOwner_ = QStringLiteral("scan");
     if (viewReloadTimer_)
         viewReloadTimer_->stop();
-    showIdleStatus();
-    showActivity(QStringLiteral("scan"), -1, QStringLiteral("Counting files"));
+    if (scanPoll_ && !scanPoll_->isActive())
+        scanPoll_->start();
+    syncScanLine(-1, QStringLiteral("Counting"));
+    if (scanRing_) {
+        scanRing_->setPercent(-1);
+        scanRing_->setToolTip(QStringLiteral("Counting"));
+        scanRing_->reveal();
+    }
+    if (pinDetail)
+        pinScanPop();
 }
 
 void MainWindow::considerResume(const Track &track)
@@ -1422,11 +1932,14 @@ QString MainWindow::shuffleKind() const
         return QStringLiteral("audio");
     if (page == 2)
         return QStringLiteral("video");
+    if (page == kPageRadio || page == kPageYoutube)
+        return {};
     if (page == 7 && player_ && player_->current().isVideo())
         return QStringLiteral("video");
     if (page == 5 && player_ && player_->current().isVideo())
         return QStringLiteral("video");
-    if (player_ && player_->current().isVideo() && page != 0 && page != 3 && page != 4)
+    if (player_ && player_->current().isVideo() && page != 0 && page != 3 && page != 4
+        && page != kPageRadio && page != kPageYoutube)
         return QStringLiteral("video");
     if (page == 0 || page == 3 || page == 4)
         return {};
@@ -1444,6 +1957,8 @@ QList<Track> MainWindow::shufflePool() const
             return list;
     }
     if (page == 4 && player_ && !player_->queue().isEmpty())
+        return player_->queue();
+    if ((page == kPageRadio || page == kPageYoutube) && player_)
         return player_->queue();
     return library_->tracks(shuffleKind());
 }
@@ -1465,7 +1980,7 @@ void MainWindow::shuffleLibrary()
     const QString what = kind == QLatin1String("audio") ? QStringLiteral("music")
         : kind == QLatin1String("video") ? QStringLiteral("videos")
         : page == 3 ? QStringLiteral("this playlist")
-        : page == 4 ? QStringLiteral("the queue")
+        : page == 4 || page == kPageRadio || page == kPageYoutube ? QStringLiteral("the queue")
         : QStringLiteral("files");
     if (pool.isEmpty()) {
         if (settings_->kidsMode()) {
@@ -1644,16 +2159,43 @@ void MainWindow::rememberPlayback(qint64 position, qint64 duration)
         lastSavedMs_ = -1;
     }
     if (!countedPlay_ && position >= 15000) {
+        if (scanning_) {
+            if (!writePlaybackOffUi(track.id, position, true))
+                return;
+        } else {
+            library_->updatePlayback(track.id, position, true);
+        }
         countedPlay_ = true;
-        library_->updatePlayback(track.id, position, true);
         lastSavedMs_ = position;
         return;
     }
     if (countedPlay_ && (lastSavedMs_ < 0 || position - lastSavedMs_ >= 5000)) {
         const qint64 store = (duration > 0 && position >= duration - 5000) ? 0 : position;
-        library_->updatePlayback(track.id, store, false);
+        if (scanning_) {
+            if (!writePlaybackOffUi(track.id, store, false))
+                return;
+        } else {
+            library_->updatePlayback(track.id, store, false);
+        }
         lastSavedMs_ = position;
     }
+}
+
+bool MainWindow::writePlaybackOffUi(qint64 id, qint64 positionMs, bool countPlay)
+{
+    if (playWriteBusy_ || id <= 0)
+        return false;
+    playWriteBusy_ = true;
+    const QString dbPath = dataDir() + QStringLiteral("/library.db");
+    QPointer<MainWindow> self(this);
+    (void)QtConcurrent::run([dbPath, id, positionMs, countPlay, self] {
+        writePlaybackAsync(dbPath, id, positionMs, countPlay);
+        QMetaObject::invokeMethod(qApp, [self] {
+            if (self)
+                self->playWriteBusy_ = false;
+        }, Qt::QueuedConnection);
+    });
+    return true;
 }
 
 void MainWindow::saveQueueSoon()
@@ -1722,6 +2264,95 @@ void MainWindow::startupScan()
         startScan(roots);
 }
 
+int MainWindow::dockCap() const
+{
+    const int bar = transport_ && transport_->isVisible() ? transport_->height() : 112;
+    return qBound(96, height() - bar - 120, 720);
+}
+
+void MainWindow::setPlayerCollapsed(bool on)
+{
+    if (fullscreen_) {
+        setChromeVisible(!on);
+        return;
+    }
+    if (on && mini_)
+        setMini(false);
+    if (playerFolded_ == on) {
+        applyPlayerFold();
+        return;
+    }
+    playerFolded_ = on;
+    dragSlack_ = 0;
+    if (settings_)
+        settings_->setPlayerFolded(on);
+    applyPlayerFold();
+}
+
+void MainWindow::applyPlayerFold()
+{
+    if (playerGrip_) {
+        playerGrip_->setCollapsed(fullscreen_ ? false : playerFolded_);
+        playerGrip_->setFullscreen(fullscreen_);
+        // The bar hides only while the picture is really full screen.
+        if (!fullscreen_ || chromeShown_)
+            playerGrip_->show();
+        else
+            playerGrip_->hide();
+    }
+    if (transport_)
+        transport_->setVisible(fullscreen_ ? chromeShown_ : !playerFolded_);
+    if (!fullscreen_)
+        placeVideo();
+}
+
+void MainWindow::dragPlayer(int dy)
+{
+    if (dy == 0 || fullscreen_)
+        return;
+    if (playerFolded_) {
+        if (dy > 0)
+            dragSlack_ += dy;
+        else
+            dragSlack_ = 0;
+        if (dragSlack_ >= 16)
+            setPlayerCollapsed(false);
+        return;
+    }
+
+    const bool dockOpen = miniDock_ && miniDock_->isVisible();
+    if (!dockOpen) {
+        if (dy < 0)
+            dragSlack_ += -dy;
+        else
+            dragSlack_ = 0;
+        if (dragSlack_ >= 28)
+            setPlayerCollapsed(true);
+        return;
+    }
+
+    const int cap = mini_ ? qBound(96, height() - 150, 720) : dockCap();
+    const int next = qBound(96, dockHeight_ + dy, cap);
+    if (next == dockHeight_ && dy < 0 && dockHeight_ <= 96) {
+        dragSlack_ += -dy;
+        if (dragSlack_ >= 36)
+            setPlayerCollapsed(true);
+        return;
+    }
+    dragSlack_ = 0;
+    if (next == dockHeight_)
+        return;
+    dockHeight_ = next;
+    miniDock_->setFixedHeight(dockHeight_);
+}
+
+void MainWindow::finishPlayerDrag()
+{
+    dragSlack_ = 0;
+    if (settings_)
+        settings_->setDockHeight(dockHeight_);
+}
+
 void MainWindow::setMini(bool on)
 {
     if (mini_ == on)
@@ -1731,20 +2362,24 @@ void MainWindow::setMini(bool on)
         hidePlayRail();
         if (fullscreen_)
             setFullscreen(false, true);
+        if (playerFolded_)
+            setPlayerCollapsed(false);
         normalGeo_ = saveGeometry();
         sidebar_->hide();
-        header_->hide();
+        if (scanPop_ && scanPop_->frame)
+            scanPop_->frame->hide();
         if (menuBar())
             menuBar()->hide();
         banner_->hide();
         stack_->hide();
         resumeBar_->hide();
         setMinimumSize(380, 180);
-        resize(460, player_->hasVideo() ? 400 : 210);
+        const bool audioUp = player_ && !player_->hasVideo() && !player_->current().path.isEmpty()
+            && !player_->current().isVideo() && player_->state() != Player::State::Stopped;
+        resize(460, player_->hasVideo() ? 400 : (audioUp ? 400 : 210));
     } else {
         setMinimumSize(960, 640);
         sidebar_->show();
-        header_->show();
         if (menuBar())
             menuBar()->show();
         stack_->show();
@@ -1758,83 +2393,144 @@ void MainWindow::setMini(bool on)
 
 void MainWindow::setFullscreen(bool on, bool user)
 {
-    if (user) {
-        fullscreenAuto_ = false;
-        holdFullscreenOff_ = !on;
-    }
+    Q_UNUSED(user);
+    if (fsAdjust_)
+        return;
     if (fullscreen_ == on) {
-        if (on && player_ && player_->state() == Player::State::Playing)
-            setChromeVisible(false);
+        if (playerGrip_) {
+            playerGrip_->setFullscreen(fullscreen_);
+            if (!fullscreen_)
+                playerGrip_->show();
+        }
         return;
     }
+    fsAdjust_ = true;
     fullscreen_ = on;
+    fsToggleMs_ = QDateTime::currentMSecsSinceEpoch();
+    if (videoClickTimer_)
+        videoClickTimer_->stop();
+    if (playerGrip_)
+        playerGrip_->setFullscreen(on);
     if (on) {
-        pageBeforeFs_ = stack_->currentIndex();
-        banner_->hide();
-        resumeBar_->hide();
-        stack_->show();
-        stack_->setCurrentIndex(7);
+        pageBeforeFs_ = stack_ ? stack_->currentIndex() : 0;
+        if (!mini_)
+            windowedGeo_ = saveGeometry();
+        if (banner_)
+            banner_->hide();
+        if (resumeBar_)
+            resumeBar_->hide();
+        if (stack_) {
+            stack_->show();
+            stack_->setCurrentIndex(7);
+        }
         placeVideo();
+        // Leave the splitter up for this click. Hiding it under the cursor
+        // made the button miss its release and the next toggle land on the picture.
+        chromeShown_ = true;
         showFullScreen();
+        // Chrome on means the splitter stays. The sidebar still steps aside.
+        setChromeVisible(true);
         lastCursor_ = mapFromGlobal(QCursor::pos());
-        if (player_->state() == Player::State::Playing)
-            setChromeVisible(false);
-        else
-            setChromeVisible(true);
         if (chromePoll_)
             chromePoll_->start();
+        QTimer::singleShot(700, this, [this] {
+            if (!fullscreen_ || !player_ || player_->state() != Player::State::Playing)
+                return;
+            if (playerGrip_ && playerGrip_->underMouse())
+                return;
+            if (transport_ && transport_->underMouse())
+                return;
+            setChromeVisible(false);
+        });
+        fsAdjust_ = false;
         return;
     }
     if (chromePoll_)
         chromePoll_->stop();
+    if (chromeTimer_)
+        chromeTimer_->stop();
     showNormal();
+    if (!mini_ && !windowedGeo_.isEmpty())
+        restoreGeometry(windowedGeo_);
     unsetCursor();
     if (video_)
         video_->unsetCursor();
     chromeShown_ = true;
-    transport_->show();
     if (mini_) {
         sidebar_->hide();
-        header_->hide();
         if (menuBar())
             menuBar()->hide();
         stack_->hide();
     } else {
         sidebar_->show();
-        header_->show();
         if (menuBar())
             menuBar()->show();
         stack_->show();
         if (!player_->backendOk() || player_->pluginCount() == 0)
             banner_->show();
     }
-    const int back = player_->current().isVideo() ? 7 : pageBeforeFs_;
-    stack_->setCurrentIndex(qBound(0, back, stack_->count() - 1));
-    for (QPushButton *button : nav_)
-        button->setAutoExclusive(false);
-    for (int i = 0; i < nav_.size(); ++i)
-        nav_.at(i)->setChecked(i == stack_->currentIndex());
-    for (QPushButton *button : nav_)
-        button->setAutoExclusive(true);
+    int back = pageBeforeFs_;
+    if (back == 7 && player_) {
+        const Track track = player_->current();
+        const bool musicPiece = track.path.isEmpty() || !track.isVideo() || track.onMusicShelf();
+        if (musicPiece)
+            back = lastLibraryPage_;
+    }
+    if (stack_)
+        stack_->setCurrentIndex(qBound(0, back, stack_->count() - 1));
+    syncNav(stack_ ? stack_->currentIndex() : -1);
     if (!videoSurface())
         hidePlayRail();
-    placeVideo();
-    schedulePageLoad(stack_->currentIndex());
+    applyPlayerFold();
+    if (playerGrip_) {
+        playerGrip_->setFullscreen(false);
+        playerGrip_->show();
+        if (QWidget *host = playerGrip_->parentWidget()) {
+            if (host->layout())
+                host->layout()->activate();
+        }
+    }
+    if (stack_)
+        schedulePageLoad(stack_->currentIndex());
+    fsAdjust_ = false;
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() != QEvent::WindowStateChange || fsAdjust_)
+        return;
+    const bool osFull = windowState().testFlag(Qt::WindowFullScreen);
+    if (osFull == fullscreen_)
+        return;
+    // showFullScreen posts its own state change. Acting on that echo
+    // sent the picture straight back out of full screen.
+    if (QDateTime::currentMSecsSinceEpoch() - fsToggleMs_ < 800)
+        return;
+    setFullscreen(osFull, false);
 }
 
 void MainWindow::setChromeVisible(bool on)
 {
-    if (!fullscreen_)
+    if (!fullscreen_) {
+        chromeShown_ = true;
+        if (playerGrip_)
+            playerGrip_->show();
         return;
+    }
     chromeShown_ = on;
     if (sidebar_)
         sidebar_->hide();
-    header_->setVisible(on);
     if (menuBar())
         menuBar()->setVisible(on);
-    transport_->setVisible(on);
+    if (transport_)
+        transport_->setVisible(on);
+    if (playerGrip_)
+        playerGrip_->setVisible(on);
     if (!on && resumeBar_)
         resumeBar_->hide();
+    if (!on && !scanPinned_ && scanPop_ && scanPop_->frame)
+        scanPop_->frame->hide();
     const bool railOpen = playRail_ && playRail_->isVisible();
     if (on || railOpen) {
         unsetCursor();
@@ -1936,11 +2632,15 @@ void MainWindow::showAboutDialog(int tab)
         "<tr><td><b>H</b></td><td>Favorite</td></tr>"
         "<tr><td><b>0–9</b></td><td>Jump through the track</td></tr>"
         "<tr><td><b>F11</b></td><td>Full screen</td></tr>"
+        "<tr><td><b>Double-click the picture</b></td><td>Full screen, and back again</td></tr>"
+        "<tr><td><b>Player bar</b></td><td>Drag to resize the picture. It stays put until the picture is really full screen. Up hides the player, down brings it back. The button beside the arrows is full screen.</td></tr>"
         "<tr><td><b>Escape</b></td><td>Leave full screen, or clear search</td></tr>"
         "<tr><td><b>F1</b></td><td>This help</td></tr>"
         "<tr><td><b>Ctrl+F</b></td><td>Search</td></tr>"
         "<tr><td><b>Ctrl+O</b></td><td>Open files</td></tr>"
         "<tr><td><b>Ctrl+U</b></td><td>Open a stream</td></tr>"
+        "<tr><td><b>Sidebar</b></td><td>Radio and YouTube sit under the library, below a line. YouTube plays in Vesper, so it keeps going when you leave the page.</td></tr>"
+        "<tr><td><b>Right edge</b></td><td>Opens the queue. Radio and YouTube are there too.</td></tr>"
         "<tr><td><b>Ctrl+L</b></td><td>Now playing</td></tr>"
         "<tr><td><b>Ctrl+,</b></td><td>Settings</td></tr>"
         "<tr><td><b>Ctrl+Q</b></td><td>Quit</td></tr>"
@@ -2032,13 +2732,20 @@ void MainWindow::syncPlayRail()
         return;
     const QList<Track> tracks = player_->queue();
     const int current = player_->currentIndex();
+    if (QLabel *title = playRail_ ? playRail_->findChild<QLabel *>(QStringLiteral("playRailTitle")) : nullptr)
+        title->setText(player_->shuffle() ? QStringLiteral("Shuffle") : QStringLiteral("Playlist"));
     playList_->blockSignals(true);
     playList_->clear();
     for (int i = 0; i < tracks.size(); ++i) {
         const Track &track = tracks.at(i);
-        QString name = QFileInfo(track.path).fileName();
+        QString name = track.displayTitle();
+        if (name.isEmpty() || name == track.path) {
+            const QString file = QFileInfo(isStreamUrl(track.path) ? QUrl(track.path).path() : track.path).fileName();
+            if (!file.isEmpty())
+                name = file;
+        }
         if (name.isEmpty())
-            name = track.displayTitle();
+            name = track.path;
         auto *item = new QListWidgetItem(name);
         item->setToolTip(track.path.isEmpty() ? track.displayTitle() : track.path);
         item->setSizeHint(QSize(0, 40));
@@ -2052,9 +2759,84 @@ void MainWindow::syncPlayRail()
     playList_->blockSignals(false);
 }
 
+void MainWindow::checkHoverRail()
+{
+    if (!isVisible())
+        return;
+    const QPoint pos = mapFromGlobal(QCursor::pos());
+    const bool inside = rect().contains(pos);
+    // The scan spinner lives in the menu bar. That top band, and a short
+    // strip under it, never opens the file list.
+    int topClear = 0;
+    if (QMenuBar *bar = menuBar()) {
+        if (bar->isVisible())
+            topClear = bar->geometry().bottom() + 28;
+    }
+    bool overScan = pos.y() < topClear;
+    if (!overScan && scanRing_ && scanRing_->isVisible()) {
+        const QRect ring(scanRing_->mapTo(this, QPoint(0, 0)), scanRing_->size());
+        overScan = ring.adjusted(-16, -8, 16, 20).contains(pos);
+    }
+    if (!overScan && scanPop_ && scanPop_->frame && scanPop_->frame->isVisible()) {
+        const QRect pop(scanPop_->frame->mapTo(this, QPoint(0, 0)), scanPop_->frame->size());
+        overScan = pop.adjusted(-8, -8, 8, 8).contains(pos);
+    }
+    const bool right = inside && !overScan && pos.x() >= width() - 40;
+    // The whole right edge covers a list's scrollbar. While browsing, only
+    // the right corners open the queue. On the video page the edge is free.
+    const bool corner = right && (pos.y() <= 88 || pos.y() >= height() - 120);
+    const bool wantRail = videoSurface() ? right : corner;
+    bool overRail = false;
+    if (playRail_ && playRail_->isVisible() && centralWidget()) {
+        const QPoint local = centralWidget()->mapFromGlobal(QCursor::pos());
+        overRail = playRail_->geometry().contains(local);
+    }
+    if (mini_ || QApplication::activePopupWidget()) {
+        if (playRail_ && playRail_->isVisible())
+            hidePlayRail();
+    } else if (wantRail || overRail) {
+        showPlayRail();
+    } else if (playRail_ && playRail_->isVisible()) {
+        hidePlayRailSoon();
+    }
+}
+
+void MainWindow::syncNav(int page)
+{
+    for (QPushButton *button : nav_)
+        button->setAutoExclusive(false);
+    for (QPushButton *button : nav_)
+        button->setChecked(button->property("page").toInt() == page);
+    for (QPushButton *button : nav_)
+        button->setAutoExclusive(true);
+}
+
+void MainWindow::syncRailTabs()
+{
+    const int page = stack_ ? stack_->currentIndex() : -1;
+    const bool radio = page == kPageRadio;
+    const bool youtube = page == kPageYoutube;
+    if (radio) {
+        if (railYoutube_)
+            railYoutube_->setChecked(false);
+        if (railRadio_)
+            railRadio_->setChecked(true);
+    } else if (youtube) {
+        if (railRadio_)
+            railRadio_->setChecked(false);
+        if (railYoutube_)
+            railYoutube_->setChecked(true);
+    } else {
+        if (railRadio_)
+            railRadio_->setChecked(false);
+        if (railYoutube_)
+            railYoutube_->setChecked(false);
+    }
+}
+
 void MainWindow::showPlayRail()
 {
-    if (!playRail_ || !player_ || !videoSurface() || player_->queue().isEmpty())
+    if (!playRail_ || !player_ || mini_)
         return;
     if (playRailTimer_)
         playRailTimer_->stop();
@@ -2062,6 +2844,7 @@ void MainWindow::showPlayRail()
     placePlayRail();
     if (opening)
         syncPlayRail();
+    syncRailTabs();
     playRail_->show();
     playRail_->raise();
     if (fullscreen_) {
@@ -2097,23 +2880,58 @@ void MainWindow::setStatus(const QString &text, bool busy)
 {
     if (!status_)
         return;
+    if (text.isEmpty()) {
+        showIdleStatus();
+        return;
+    }
     const QFontMetrics metrics(status_->font());
-    status_->setText(metrics.elidedText(text, Qt::ElideRight, 240));
-    if (status_->toolTip().isEmpty() || !scanning_)
-        status_->setToolTip(text);
+    status_->setFixedWidth(180);
+    status_->setText(metrics.elidedText(text, Qt::ElideRight, 172));
+    status_->setToolTip(text);
+    const bool statusWas = status_->isVisible();
+    const bool busyWas = busyBar_ && busyBar_->isVisible();
+    status_->show();
     if (busyBar_)
         busyBar_->setVisible(busy && !scanning_);
+    if (status_->isVisible() != statusWas || (busyBar_ && busyBar_->isVisible() != busyWas))
+        relayoutBar();
+    if (!busy) {
+        const QString shown = text;
+        QTimer::singleShot(4000, this, [this, shown] {
+            if (!status_ || status_->toolTip() != shown)
+                return;
+            if (busyBar_ && busyBar_->isVisible())
+                return;
+            showIdleStatus();
+        });
+    }
 }
 
 void MainWindow::showIdleStatus()
 {
-    if (!library_)
+    const bool statusWas = status_ && status_->isVisible();
+    const bool busyWas = busyBar_ && busyBar_->isVisible();
+    if (status_) {
+        status_->setFixedWidth(180);
+        status_->clear();
+        status_->setToolTip({});
+        status_->hide();
+    }
+    if (busyBar_ && !scanning_)
+        busyBar_->hide();
+    if (statusWas || busyWas)
+        relayoutBar();
+}
+
+void MainWindow::relayoutBar()
+{
+    QMenuBar *bar = menuBar();
+    if (!bar || !bar->isVisible() || bar->size().isEmpty())
         return;
-    const LibraryStats stats = library_->stats();
-    if (stats.audio + stats.video == 0)
-        setStatus(QStringLiteral("Add a folder to begin"));
-    else
-        setStatus(QStringLiteral("%1 songs · %2 videos").arg(stats.audio).arg(stats.video));
+    // The menu bar sizes its corner from sizeHint only on resize. A status
+    // label showing up would otherwise squeeze the search field until then.
+    QResizeEvent event(bar->size(), bar->size());
+    QCoreApplication::sendEvent(bar, &event);
 }
 
 void MainWindow::schedulePageLoad(int page)
@@ -2131,21 +2949,60 @@ void MainWindow::schedulePageLoad(int page)
 
 void MainWindow::showScan(int percent, const QString &detail)
 {
+    scanNote_ = detail;
+    const bool busyWas = busyBar_ && busyBar_->isVisible();
+    if (busyBar_)
+        busyBar_->hide();
+    if (busyWas)
+        relayoutBar();
     if (!scanRing_)
         return;
     scanRing_->setPercent(percent);
-    scanRing_->setDetail(detail.isEmpty() ? QStringLiteral("Scanning") : detail);
-    scanRing_->show();
-    if (busyBar_)
-        busyBar_->hide();
-    if (!scanSpin_)
+    scanRing_->reveal();
+    if (scanPop_ && scanPop_->frame && scanPop_->frame->isVisible())
+        fillScanPop();
+}
+
+void MainWindow::syncScanLine(int percent, const QString &tip)
+{
+    if (!scanLine_)
         return;
     if (percent < 0) {
-        if (!scanSpin_->isActive())
-            scanSpin_->start();
+        if (scanLine_->maximum() != 0)
+            scanLine_->setRange(0, 0);
     } else {
-        scanSpin_->stop();
+        if (scanLine_->maximum() != 100)
+            scanLine_->setRange(0, 100);
+        const int value = qBound(0, percent, 100);
+        if (scanLine_->value() != value)
+            scanLine_->setValue(value);
     }
+    if (!tip.isEmpty() && scanLine_->toolTip() != tip)
+        scanLine_->setToolTip(tip);
+    if (!scanLine_->isVisible())
+        scanLine_->show();
+}
+
+void MainWindow::fillScanPop()
+{
+    if (!scanPop_ || !scanPop_->frame)
+        return;
+    if (scanning_ && scanner_)
+        applyScanPop(scanPop_, scanner_->progressSnapshot());
+    else
+        applyScanNote(scanPop_, scanNote_);
+}
+
+void MainWindow::pinScanPop()
+{
+    if (!scanPop_ || !scanPop_->frame)
+        return;
+    scanPinned_ = true;
+    if (scanRing_)
+        scanRing_->reveal();
+    fillScanPop();
+    scanPop_->frame->show();
+    placeScanPop();
 }
 
 void MainWindow::showActivity(const QString &owner, int percent, const QString &detail)
@@ -2161,12 +3018,47 @@ void MainWindow::clearActivity(const QString &owner)
     if (activityOwner_ != owner)
         return;
     activityOwner_.clear();
-    if (scanSpin_)
-        scanSpin_->stop();
-    if (!scanRing_)
+    if (owner == QLatin1String("scan") && scanLine_)
+        scanLine_->hide();
+    if (scanPinned_)
         return;
-    scanRing_->hideDetail();
-    scanRing_->hide();
+    scanNote_.clear();
+    if (scanPop_ && scanPop_->frame)
+        scanPop_->frame->hide();
+    if (scanRing_) {
+        scanRing_->setToolTip({});
+        scanRing_->hide();
+    }
+}
+
+void MainWindow::toggleScanPop()
+{
+    if (!scanPop_ || !scanPop_->frame || !scanRing_ || !scanRing_->isVisible())
+        return;
+    if (scanPop_->frame->isVisible()) {
+        scanPop_->frame->hide();
+        scanPinned_ = false;
+        if (!scanning_ && activityOwner_.isEmpty()) {
+            scanRing_->setToolTip({});
+            scanRing_->hide();
+        }
+        return;
+    }
+    pinScanPop();
+}
+
+void MainWindow::placeScanPop()
+{
+    if (!scanPop_ || !scanPop_->frame || !scanPop_->frame->isVisible() || !scanRing_ || !centralWidget())
+        return;
+    const QPoint below = scanRing_->mapTo(centralWidget(), QPoint(0, scanRing_->height() + 8));
+    int x = below.x() + scanRing_->width() - scanPop_->frame->width();
+    int y = below.y();
+    const QRect area = centralWidget()->rect();
+    x = qBound(8, x, qMax(8, area.width() - scanPop_->frame->width() - 8));
+    y = qBound(8, y, qMax(8, area.height() - scanPop_->frame->height() - 8));
+    scanPop_->frame->move(x, y);
+    scanPop_->frame->raise();
 }
 
 void MainWindow::reloadViews()
@@ -2189,23 +3081,88 @@ void MainWindow::reloadViews()
         playlists_->reload();
 }
 
+namespace {
+
+bool chooseFolderRole(QWidget *parent, QString *role)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QStringLiteral("What is in this folder?"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *note = new QLabel(QStringLiteral(
+        "Music videos play as video and are listed with your songs. "
+        "Decide from the folder name when it is already called Series, Movies, Music, or Musik."));
+    note->setWordWrap(true);
+    layout->addWidget(note);
+    auto *group = new QButtonGroup(&dialog);
+    const QStringList labels = {
+        QStringLiteral("Decide from the folder name"),
+        QStringLiteral("Music"),
+        QStringLiteral("Movies"),
+        QStringLiteral("Series"),
+        QStringLiteral("Music videos"),
+    };
+    const QStringList roles = {
+        QString(),
+        QStringLiteral("music"),
+        QStringLiteral("movies"),
+        QStringLiteral("series"),
+        QStringLiteral("music_videos"),
+    };
+    for (int i = 0; i < labels.size(); ++i) {
+        auto *radio = new QRadioButton(labels.at(i), &dialog);
+        radio->setChecked(i == 0);
+        group->addButton(radio, i);
+        layout->addWidget(radio);
+    }
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.setMinimumWidth(420);
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+    const int id = group->checkedId();
+    *role = (id >= 0 && id < roles.size()) ? roles.at(id) : QString();
+    return true;
+}
+
+} // namespace
+
+void MainWindow::addLibraryFolder()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Add a folder"), QDir::homePath());
+    if (dir.isEmpty())
+        return;
+    QString role;
+    if (!chooseFolderRole(this, &role))
+        return;
+    const qint64 id = library_->addFolder(dir, true, role);
+    if (id > 0)
+        startScan({{id, cleanDirPath(dir)}}, true);
+}
+
 void MainWindow::buildMenus()
 {
     auto *libraryMenu = menuBar()->addMenu(QStringLiteral("Library"));
+    auto *openFiles = libraryMenu->addAction(QStringLiteral("Open files…"));
+    openFiles->setShortcut(QKeySequence::Open);
+    connect(openFiles, &QAction::triggered, this, [this] {
+        const QStringList files = QFileDialog::getOpenFileNames(
+            this, QStringLiteral("Open"), QDir::homePath(),
+            QStringLiteral("Media (*.mp3 *.flac *.ogg *.opus *.m4a *.aac *.wav *.mp4 *.mkv *.webm *.avi *.mov *.m4v);;All files (*)"));
+        if (!files.isEmpty())
+            openPaths(files);
+    });
+    libraryMenu->addSeparator();
     libraryMenu->addAction(QStringLiteral("Home"), this, [this] { showPage(0); });
     libraryMenu->addAction(QStringLiteral("Music"), this, [this] { showPage(1); });
     libraryMenu->addAction(QStringLiteral("Videos"), this, [this] { showPage(2); });
     libraryMenu->addAction(QStringLiteral("Playlists"), this, [this] { showPage(3); });
     libraryMenu->addAction(QStringLiteral("Queue"), this, [this] { showPage(4); });
+    libraryMenu->addAction(QStringLiteral("Radio"), this, [this] { showPage(kPageRadio); });
+    libraryMenu->addAction(QStringLiteral("YouTube"), this, [this] { showPage(kPageYoutube); });
     libraryMenu->addSeparator();
-    libraryMenu->addAction(QStringLiteral("Add a folder…"), this, [this] {
-        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Add a folder"), QDir::homePath());
-        if (dir.isEmpty())
-            return;
-        const qint64 id = library_->addFolder(dir, true);
-        if (id > 0)
-            startScan({{id, cleanDirPath(dir)}});
-    });
+    libraryMenu->addAction(QStringLiteral("Add a folder…"), this, &MainWindow::addLibraryFolder);
     libraryMenu->addAction(QStringLiteral("Rescan library"), this, [this] {
         QList<QPair<qint64, QString>> roots;
         for (const Folder &folder : library_->folders())
@@ -2214,7 +3171,7 @@ void MainWindow::buildMenus()
             setStatus(QStringLiteral("Add a folder first"));
             return;
         }
-        startScan(roots);
+        startScan(roots, true);
     });
     libraryMenu->addAction(QStringLiteral("Organize names…"), this, [this] { organizeMedia({}); });
     menuBar()->addAction(QStringLiteral("Now playing"), this, [this] { showPage(5); });
@@ -2236,6 +3193,7 @@ void MainWindow::runSearch()
         return;
     }
     searchModel_->setTracks(library_->search(text));
+    reapplySort(searchTable_);
     if (stack_->currentIndex() != 8) {
         stack_->setCurrentIndex(8);
         for (QPushButton *button : nav_)
@@ -2244,6 +3202,7 @@ void MainWindow::runSearch()
             button->setChecked(false);
         for (QPushButton *button : nav_)
             button->setAutoExclusive(true);
+        syncRailTabs();
         placeVideo();
     }
 }
@@ -2253,9 +3212,26 @@ Track MainWindow::trackForPath(const QString &path) const
     if (isStreamUrl(path)) {
         Track track;
         track.path = path;
-        const QString ext = QFileInfo(QUrl(path).path()).suffix().toLower();
-        track.kind = isAudioExt(ext) ? QStringLiteral("audio") : QStringLiteral("video");
-        const QString leaf = QUrl(path).fileName();
+        const QString leaf = QUrl(path).path().section(QLatin1Char('/'), -1);
+        const QString ext = QFileInfo(leaf).suffix().toLower();
+        const QString folded = leaf.toLower();
+        bool audio = isAudioExt(ext);
+        // Icecast names often have no dot: groovesalad-128-mp3, aac-320.
+        if (!audio && !isVideoExt(ext)) {
+            const QStringList tails = {
+                QStringLiteral("mp3"), QStringLiteral("aac"), QStringLiteral("ogg"),
+                QStringLiteral("opus"), QStringLiteral("flac"), QStringLiteral("m4a"),
+            };
+            for (const QString &tail : tails) {
+                if (folded == tail || folded.endsWith(QLatin1Char('.') + tail)
+                    || folded.endsWith(QLatin1Char('-') + tail)
+                    || folded.startsWith(tail + QLatin1Char('-'))) {
+                    audio = true;
+                    break;
+                }
+            }
+        }
+        track.kind = audio ? QStringLiteral("audio") : QStringLiteral("video");
         track.title = leaf.isEmpty() ? path : cleanMediaTitle(leaf);
         return track;
     }
@@ -2310,6 +3286,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     saveQueue();
     settings_->setGeometry(saveGeometry());
+    settings_->setDockHeight(dockHeight_);
     settings_->setLastPage(lastLibraryPage_);
     if (scanner_ && scanner_->isRunning())
         scanner_->requestCancel();
@@ -2321,6 +3298,12 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     QMainWindow::resizeEvent(event);
     if (playRail_ && playRail_->isVisible())
         placePlayRail();
+    placeScanPop();
+    if (!mini_ && !fullscreen_ && height() >= 640 && miniDock_ && miniDock_->isVisible()
+        && dockHeight_ > dockCap()) {
+        dockHeight_ = dockCap();
+        miniDock_->setFixedHeight(dockHeight_);
+    }
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -2345,25 +3328,27 @@ void MainWindow::dropEvent(QDropEvent *event)
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (scanPop_ && scanPop_->frame && scanPop_->frame->isVisible() && event->type() == QEvent::KeyPress) {
+        auto *key = static_cast<QKeyEvent *>(event);
+        if (key->key() == Qt::Key_Escape) {
+            scanPop_->frame->hide();
+            scanPinned_ = false;
+            if (!scanning_ && activityOwner_.isEmpty() && scanRing_) {
+                scanRing_->setToolTip({});
+                scanRing_->hide();
+            }
+            return true;
+        }
+    }
     if (event->type() == QEvent::MouseMove || event->type() == QEvent::HoverMove) {
-        const QPoint pos = mapFromGlobal(QCursor::pos());
-        const bool inside = rect().contains(pos);
-        const bool edge = inside && pos.x() >= width() - 32;
-        bool overRail = false;
-        if (playRail_ && playRail_->isVisible() && centralWidget()) {
-            const QPoint local = centralWidget()->mapFromGlobal(QCursor::pos());
-            overRail = playRail_->geometry().contains(local);
+        checkHoverRail();
+        if (fullscreen_) {
+            const QPoint pos = mapFromGlobal(QCursor::pos());
+            const bool inside = rect().contains(pos);
+            const bool right = inside && pos.x() >= width() - 40;
+            if (inside && !right)
+                pokeChrome();
         }
-        if (!videoSurface()) {
-            if (playRail_ && playRail_->isVisible())
-                hidePlayRail();
-        } else if (edge || overRail) {
-            showPlayRail();
-        } else if (playRail_ && playRail_->isVisible()) {
-            hidePlayRailSoon();
-        }
-        if (fullscreen_ && inside && !edge)
-            pokeChrome();
     }
     if (event->type() != QEvent::KeyPress)
         return QMainWindow::eventFilter(watched, event);

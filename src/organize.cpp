@@ -31,7 +31,14 @@ struct Identity {
     bool cryptic = false;
     bool messy = false;
     bool tv = false;
+    bool fromFolder = false;
     QString reason;
+};
+
+struct LayoutShape {
+    QString movie = QStringLiteral("Movies");
+    QString series = QStringLiteral("Shows");
+    QString music = QStringLiteral("Music");
 };
 
 QString safeComponent(QString text)
@@ -142,7 +149,12 @@ QStringList polishWords(QStringList words)
 
 QString joinWords(const QStringList &words)
 {
-    return words.join(QLatin1Char(' ')).simplified();
+    const QString joined = words.join(QLatin1Char(' ')).simplified();
+    // A single token keeps the spelling the file used. "EVO" and "goodnitw"
+    // are names. A release split into words, such as BLACK.HAWK.DOWN, is cased.
+    if (!joined.contains(QLatin1Char(' ')))
+        return joined;
+    return polishCase(joined);
 }
 
 QStringList splitCamel(const QString &text)
@@ -315,9 +327,65 @@ Identity identityFromName(const QString &fileBase, bool video)
     return id;
 }
 
-QString relativeLayout(const Identity &id, bool video)
+void noteFolder(Identity *id, const QString &path, bool video)
 {
-    if (video && id.tv && id.season > 0 && !id.show.isEmpty()) {
+    if (!video || mediaBucket(path) == MediaBucket::Music)
+        return;
+    const SeriesName parsed = seriesFromPath(path);
+    if (parsed.show.isEmpty() || (parsed.season <= 0 && parsed.episode <= 0))
+        return;
+    if (mediaBucket(path) == MediaBucket::Movie && parsed.season <= 0 && parsed.episode <= 0)
+        return;
+    id->tv = true;
+    id->fromFolder = true;
+    if (id->show.isEmpty())
+        id->show = parsed.show;
+    if (id->season <= 0)
+        id->season = parsed.season;
+    if (id->episode <= 0)
+        id->episode = parsed.episode;
+    const QString number = QString::number(id->episode);
+    const QString padded = number.rightJustified(2, QLatin1Char('0'));
+    if (id->title == number || id->title == padded)
+        id->title.clear();
+    if (id->reason.isEmpty())
+        id->reason = QStringLiteral("Folder");
+}
+
+QString pickLabel(const QHash<QString, int> &counts, const QString &fallback)
+{
+    if (counts.isEmpty())
+        return fallback;
+    int best = 0;
+    QHash<QString, int> tied;
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+        if (it.value() > best) {
+            best = it.value();
+            tied.clear();
+            tied.insert(it.key(), 1);
+        } else if (it.value() == best) {
+            tied.insert(it.key(), 1);
+        }
+    }
+    if (tied.size() == 1)
+        return tied.constBegin().key();
+    const QString spelling = preferredSpelling(tied);
+    return spelling.isEmpty() ? fallback : spelling;
+}
+
+QString relativeLayout(const Identity &id, bool video, const LayoutShape &shape = LayoutShape(),
+                       MediaBucket bucket = MediaBucket::None)
+{
+    const bool music = !video || bucket == MediaBucket::Music;
+    if (music && !id.title.isEmpty()) {
+        const QString artist = safeComponent(id.artist.isEmpty() ? QStringLiteral("Unknown artist") : id.artist);
+        const QString album = safeComponent(id.album.isEmpty() ? QStringLiteral("Singles") : id.album);
+        const QString file = id.trackNo > 0
+            ? QStringLiteral("%1 - %2").arg(id.trackNo, 2, 10, QChar('0')).arg(id.title)
+            : id.title;
+        return QStringLiteral("%1/%2/%3/%4").arg(shape.music, artist, album, safeComponent(file));
+    }
+    if (!music && id.tv && id.season > 0 && !id.show.isEmpty()) {
         const QString season = QStringLiteral("Season %1").arg(id.season, 2, 10, QChar('0'));
         QString file = QStringLiteral("%1 - S%2E%3")
                            .arg(id.show)
@@ -325,22 +393,16 @@ QString relativeLayout(const Identity &id, bool video)
                            .arg(qMax(0, id.episode), 2, 10, QChar('0'));
         if (!id.title.isEmpty() && id.title.compare(id.show, Qt::CaseInsensitive) != 0)
             file += QStringLiteral(" - ") + id.title;
-        return QStringLiteral("Shows/%1/%2/%3").arg(safeComponent(id.show), season, safeComponent(file));
+        return QStringLiteral("%1/%2/%3/%4").arg(shape.series, safeComponent(id.show), season, safeComponent(file));
     }
-    if (video && !id.title.isEmpty() && id.year >= 1900) {
-        const QString leaf = QStringLiteral("%1 (%2)").arg(safeComponent(id.title)).arg(id.year);
-        return QStringLiteral("Movies/%1/%2").arg(leaf, leaf);
+    if (!music && !id.title.isEmpty() && (id.year >= 1900 || bucket == MediaBucket::Movie)) {
+        const QString leaf = id.year >= 1900
+            ? QStringLiteral("%1 (%2)").arg(safeComponent(id.title)).arg(id.year)
+            : safeComponent(id.title);
+        return QStringLiteral("%1/%2/%3").arg(shape.movie, leaf, leaf);
     }
-    if (video && !id.title.isEmpty())
+    if (!music && !id.title.isEmpty())
         return QStringLiteral("Videos/%1").arg(safeComponent(id.title));
-    if (!video && !id.title.isEmpty()) {
-        const QString artist = safeComponent(id.artist.isEmpty() ? QStringLiteral("Unknown artist") : id.artist);
-        const QString album = safeComponent(id.album.isEmpty() ? QStringLiteral("Singles") : id.album);
-        const QString file = id.trackNo > 0
-            ? QStringLiteral("%1 - %2").arg(id.trackNo, 2, 10, QChar('0')).arg(id.title)
-            : id.title;
-        return QStringLiteral("Music/%1/%2/%3").arg(artist, album, safeComponent(file));
-    }
     return {};
 }
 
@@ -575,6 +637,24 @@ QList<OrganizeItem> planOrganization(const QString &root, bool includeTidy)
     if (!QFileInfo(folder).isDir())
         return items;
     const QStringList files = mediaFilesUnder(folder);
+    QHash<QString, int> movieNames;
+    QHash<QString, int> seriesNames;
+    QHash<QString, int> musicNames;
+    for (const QString &path : files) {
+        const QString movie = containerLabel(path, MediaBucket::Movie);
+        const QString series = containerLabel(path, MediaBucket::Series);
+        const QString music = containerLabel(path, MediaBucket::Music);
+        if (!movie.isEmpty())
+            movieNames[movie] += 1;
+        if (!series.isEmpty())
+            seriesNames[series] += 1;
+        if (!music.isEmpty())
+            musicNames[music] += 1;
+    }
+    LayoutShape shape;
+    shape.movie = pickLabel(movieNames, shape.movie);
+    shape.series = pickLabel(seriesNames, shape.series);
+    shape.music = pickLabel(musicNames, shape.music);
 
     struct Row {
         QString path;
@@ -596,7 +676,9 @@ QList<OrganizeItem> planOrganization(const QString &root, bool includeTidy)
         const QString stripped = stripCopySuffix(row.base);
         row.cryptic = nameIsCrypticId(stripped);
         row.messy = !row.cryptic && nameIsMessy(row.base);
-        row.id = identityFromName(row.base, isVideoExt(info.suffix()));
+        const bool video = isVideoExt(info.suffix());
+        row.id = identityFromName(row.base, video);
+        noteFolder(&row.id, row.path, video);
         rows.append(row);
     }
 
@@ -662,9 +744,10 @@ QList<OrganizeItem> planOrganization(const QString &root, bool includeTidy)
             }
             return;
         }
-        if (!row.cryptic && !row.messy && !includeTidy)
+        if (!row.cryptic && !row.messy && !row.id.fromFolder && !includeTidy)
             return;
-        const QString relative = relativeLayout(row.id, video);
+        const MediaBucket bucket = mediaBucket(row.path);
+        const QString relative = relativeLayout(row.id, video, shape, bucket);
         if (relative.isEmpty())
             return;
         const QString ext = QFileInfo(row.path).suffix();
@@ -854,6 +937,31 @@ int organizeSelfCheck()
     }
     if (!sawBlocked || !sawMovie)
         fail(errors, QStringLiteral("hash plan blocked=%1 movie=%2").arg(sawBlocked).arg(sawMovie));
+
+    if (polishCase(QStringLiteral("BLACK HAWK DOWN")) != QLatin1String("Black Hawk Down"))
+        fail(errors, QStringLiteral("caps %1").arg(polishCase(QStringLiteral("BLACK HAWK DOWN"))));
+    if (polishCase(QStringLiteral("PRINCESS OF MARS")) != QLatin1String("Princess of Mars"))
+        fail(errors, QStringLiteral("small words %1").arg(polishCase(QStringLiteral("PRINCESS OF MARS"))));
+    if (presentMediaName(QStringLiteral("BlackSails")) != QLatin1String("Black Sails"))
+        fail(errors, QStringLiteral("camel %1").arg(presentMediaName(QStringLiteral("BlackSails"))));
+
+    QTemporaryDir seriesDir;
+    if (!seriesDir.isValid())
+        return fail(errors, QStringLiteral("series temp"));
+    QDir().mkpath(seriesDir.filePath(QStringLiteral("Series/BlackSails")));
+    QFile episode(seriesDir.filePath(QStringLiteral("Series/BlackSails/1.mp4")));
+    if (!episode.open(QIODevice::WriteOnly) || episode.write("ep") < 0)
+        return fail(errors, QStringLiteral("series file"));
+    episode.close();
+    const QList<OrganizeItem> seriesPlan = planOrganization(seriesDir.path(), false);
+    bool sawEpisode = false;
+    for (const OrganizeItem &item : seriesPlan) {
+        if (item.to.contains(QStringLiteral("Series/Black Sails/Season 01/Black Sails - S01E01")))
+            sawEpisode = true;
+    }
+    if (!sawEpisode)
+        fail(errors, seriesPlan.isEmpty() ? QStringLiteral("series plan empty")
+                                          : seriesPlan.first().to + QStringLiteral(" / ") + seriesPlan.first().reason);
 
     if (errors == 0)
         std::fprintf(stderr, "organize: ok\n");

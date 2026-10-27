@@ -3,5 +3,12 @@
         <file alias="style.qss">resources/vesper.qss</file>
         <file alias="icon.svg">resources/vesper.svg</file>
         <file alias="icon-512.png">resources/vesper-512.png</file>
+        <file alias="witch/1.png">resources/witch/witch-1.png</file>
+        <file alias="witch/2.png">resources/witch/witch-2.png</file>
+        <file alias="witch/3.png">resources/witch/witch-3.png</file>
+        <file alias="witch/4.png">resources/witch/witch-4.png</file>
+        <file alias="witch/5.png">resources/witch/witch-5.png</file>
+        <file alias="witch/6.png">resources/witch/witch-6.png</file>
+        <file alias="witch/7.png">resources/witch/witch-7.png</file>
     </qresource>
 </RCC>

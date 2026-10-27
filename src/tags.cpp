@@ -157,8 +157,10 @@ QByteArray artFromMp4(const char *path)
 bool genericFolder(const QString &name)
 {
     const QString n = name.toLower();
-    return n == QLatin1String("music") || n == QLatin1String("audio") || n == QLatin1String("songs")
-        || n == QLatin1String("videos") || n == QLatin1String("video") || n == QLatin1String("movies")
+    return n == QLatin1String("music") || n == QLatin1String("musik") || n == QLatin1String("audio")
+        || n == QLatin1String("songs") || n == QLatin1String("videos") || n == QLatin1String("video")
+        || n == QLatin1String("movies") || n == QLatin1String("films") || n == QLatin1String("filme")
+        || n == QLatin1String("series") || n == QLatin1String("serien") || n == QLatin1String("shows")
         || n == QLatin1String("downloads") || n == QLatin1String("desktop");
 }
 
@@ -176,7 +178,9 @@ Track readTrackTags(const QString &path, const QString &artworkDirectory)
 
     const QByteArray encoded = QFile::encodeName(track.path);
     const char *cpath = encoded.constData();
-    TagLib::FileRef ref(cpath, true, TagLib::AudioProperties::Average);
+    // Fast keeps the scan thread from reading deep into every movie file.
+    // The prober fills in a duration when this pass does not.
+    TagLib::FileRef ref(cpath, true, TagLib::AudioProperties::Fast);
     if (!ref.isNull()) {
         if (ref.tag()) {
             track.title = fromTag(ref.tag()->title());
@@ -210,6 +214,8 @@ Track readTrackTags(const QString &path, const QString &artworkDirectory)
             track.showName = prop(map, "SHOW");
             if (track.showName.isEmpty())
                 track.showName = prop(map, "TVSHOW");
+            if (track.showName.isEmpty())
+                track.showName = prop(map, "SERIES");
             track.season = leadingInt(prop(map, "SEASONNUMBER"));
             if (track.season == 0)
                 track.season = leadingInt(prop(map, "SEASON"));

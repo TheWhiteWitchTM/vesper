@@ -31,6 +31,7 @@ SOURCES += \
     src/icons.cpp \
     src/organize.cpp \
     src/identify.cpp \
+    src/youtube.cpp \
     src/ui/trackmodel.cpp \
     src/ui/coverdelegate.cpp \
     src/ui/transport.cpp \
@@ -39,8 +40,11 @@ SOURCES += \
     src/ui/videoview.cpp \
     src/ui/queueview.cpp \
     src/ui/playlistview.cpp \
+    src/ui/radioview.cpp \
+    src/ui/youtubeview.cpp \
     src/ui/settingsview.cpp \
     src/ui/nowplaying.cpp \
+    src/ui/stage.cpp \
     src/ui/equalizer.cpp \
     src/ui/organizedialog.cpp \
     src/ui/mainwindow.cpp
@@ -60,6 +64,7 @@ HEADERS += \
     src/icons.h \
     src/organize.h \
     src/identify.h \
+    src/youtube.h \
     src/ui/trackmodel.h \
     src/ui/coverdelegate.h \
     src/ui/transport.h \
@@ -68,8 +73,11 @@ HEADERS += \
     src/ui/videoview.h \
     src/ui/queueview.h \
     src/ui/playlistview.h \
+    src/ui/radioview.h \
+    src/ui/youtubeview.h \
     src/ui/settingsview.h \
     src/ui/nowplaying.h \
+    src/ui/stage.h \
     src/ui/equalizer.h \
     src/ui/organizedialog.h \
     src/ui/mainwindow.h

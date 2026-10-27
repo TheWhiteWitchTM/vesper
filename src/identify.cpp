@@ -11,17 +11,23 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStandardPaths>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <cstdio>
@@ -30,38 +36,6 @@ namespace {
 
 constexpr double kConfidenceFloor = 0.6;
 constexpr qint64 kRetrySeconds = 14LL * 24 * 3600;
-
-int seasonFromFolderName(const QString &name)
-{
-    static const QRegularExpression season(
-        QStringLiteral("(?i)^(?:season|staffel)[\\s._-]*(\\d{1,2})$"));
-    static const QRegularExpression shortSeason(QStringLiteral("(?i)^s(\\d{1,2})$"));
-    const QRegularExpressionMatch match = season.match(name.trimmed());
-    if (match.hasMatch())
-        return match.captured(1).toInt();
-    const QRegularExpressionMatch brief = shortSeason.match(name.trimmed());
-    if (brief.hasMatch())
-        return brief.captured(1).toInt();
-    return 0;
-}
-
-bool usableShowName(const QString &name)
-{
-    const QString trimmed = name.trimmed();
-    if (trimmed.isEmpty() || nameIsCrypticId(trimmed) || seasonFromFolderName(trimmed) > 0)
-        return false;
-    static const QStringList generic = {
-        QStringLiteral("music"), QStringLiteral("movies"), QStringLiteral("movie"),
-        QStringLiteral("videos"), QStringLiteral("video"), QStringLiteral("downloads"),
-        QStringLiteral("download"), QStringLiteral("desktop"), QStringLiteral("private"),
-        QStringLiteral("shows"), QStringLiteral("show"), QStringLiteral("tv"),
-        QStringLiteral("series"), QStringLiteral("home"), QStringLiteral("users"),
-        QStringLiteral("media"), QStringLiteral("incoming"), QStringLiteral("complete"),
-        QStringLiteral("incomplete"), QStringLiteral("tmp"), QStringLiteral("temp"),
-        QStringLiteral("season"),
-    };
-    return !generic.contains(trimmed.toLower());
-}
 
 QString responseText(const QJsonObject &root)
 {
@@ -497,11 +471,10 @@ bool IdNamer::groom()
     return false;
 }
 
-QList<Track> IdNamer::nextCluster(QList<Track> *context) const
+QList<Track> IdNamer::nextCluster(const QList<Track> &all, QList<Track> *context) const
 {
     if (context)
         context->clear();
-    const QList<Track> all = library_->tracks(QString());
     const qint64 now = QDateTime::currentSecsSinceEpoch();
     QHash<QString, QList<Track>> groups;
     for (const Track &track : all) {
@@ -552,23 +525,64 @@ QList<Track> IdNamer::nextCluster(QList<Track> *context) const
     return cluster;
 }
 
+struct GroomPlan {
+    int numbered = 0;
+    QList<Track> renames;
+};
+
+int writeSeriesNumbers(const QString &dbPath, const QList<IdItem> &items)
+{
+    if (dbPath.isEmpty() || items.isEmpty())
+        return 0;
+    const QString conn = QStringLiteral("vesper-groom-%1").arg(quint64(QThread::currentThreadId()));
+    int numbered = 0;
+    {
+        QSqlDatabase db = QSqlDatabase::contains(conn)
+            ? QSqlDatabase::database(conn)
+            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        if (!db.isOpen()) {
+            db.setDatabaseName(dbPath);
+            if (!db.open())
+                return 0;
+            QSqlQuery pragma(db);
+            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            pragma.exec(QStringLiteral("PRAGMA busy_timeout=4000"));
+            pragma.exec(QStringLiteral("PRAGMA wal_autocheckpoint=0"));
+        }
+        QSqlQuery q(db);
+        if (!q.prepare(QStringLiteral(
+                "UPDATE tracks SET show_name=?, season=?, episode=?, id_lookup=1, id_lookup_at=? "
+                "WHERE id=? AND (IFNULL(show_name,'')='' OR IFNULL(episode,0)<=0)")))
+            return 0;
+        const qint64 now = QDateTime::currentSecsSinceEpoch();
+        for (int start = 0; start < items.size(); start += 80) {
+            if (!db.transaction())
+                break;
+            const int end = qMin(start + 80, items.size());
+            for (int i = start; i < end; ++i) {
+                const IdItem &item = items.at(i);
+                if (item.id <= 0 || item.show.isEmpty())
+                    continue;
+                q.bindValue(0, item.show);
+                q.bindValue(1, item.season);
+                q.bindValue(2, item.episode);
+                q.bindValue(3, now);
+                q.bindValue(4, item.id);
+                if (q.exec() && q.numRowsAffected() > 0)
+                    ++numbered;
+            }
+            if (!db.commit())
+                db.rollback();
+        }
+    }
+    return numbered;
+}
+
 void IdNamer::maybeRun()
 {
-    if (busy_ || failedThisSession_)
+    if (busy_ || failedThisSession_ || grooming_)
         return;
-    emit statusChanged(QStringLiteral("Checking file names…"));
-    QTimer::singleShot(0, this, [this] {
-        if (busy_ || failedThisSession_)
-            return;
-        const bool named = groom();
-        if (!settings_->identifyEnabled()
-            || settings_->identifyDay() == QDate::currentDate().toString(Qt::ISODate)) {
-            if (!named)
-                emit statusChanged({});
-            return;
-        }
-        startRequest();
-    });
+    beginGroom(false);
 }
 
 void IdNamer::runNow()
@@ -577,10 +591,92 @@ void IdNamer::runNow()
         emit statusChanged(QStringLiteral("Still asking Grok about the last file"));
         return;
     }
+    if (grooming_)
+        return;
     failedThisSession_ = false;
-    groom();
-    if (settings_->identifyDay() == QDate::currentDate().toString(Qt::ISODate)) {
-        emit statusChanged(QStringLiteral("Already looked at one id name today"));
+    beginGroom(true);
+}
+
+void IdNamer::beginGroom(bool thenAsk)
+{
+    grooming_ = true;
+    groomThenAsk_ = thenAsk;
+    groomNumbered_ = 0;
+    groomRenamed_ = 0;
+    renameQueue_.clear();
+    renameAt_ = 0;
+    emit statusChanged(QStringLiteral("Checking file names…"));
+    const QString dbPath = dataDir() + QStringLiteral("/library.db");
+    auto *watcher = new QFutureWatcher<GroomPlan>(this);
+    QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<GroomPlan>::finished, this, [self, watcher] {
+        const GroomPlan plan = watcher->result();
+        watcher->deleteLater();
+        if (!self)
+            return;
+        self->groomNumbered_ = plan.numbered;
+        self->renameQueue_ = plan.renames;
+        self->renameAt_ = 0;
+        self->applyRenameChunk();
+    });
+    watcher->setFuture(QtConcurrent::run([dbPath] {
+        GroomPlan plan;
+        const QList<Track> videos = readTracksKind(dbPath, QStringLiteral("video"));
+        plan.numbered = writeSeriesNumbers(dbPath, planLocalSeries(videos));
+        const QList<Track> all = readTracksKind(dbPath, QString());
+        for (const Track &track : all) {
+            if (track.id <= 0 || track.path.isEmpty() || isStreamUrl(track.path))
+                continue;
+            const QFileInfo info(track.path);
+            if (!nameIsCrypticId(info.completeBaseName()))
+                continue;
+            if (mediaBaseName(track).isEmpty())
+                continue;
+            if (!info.exists() || !QFileInfo(info.absolutePath()).isWritable())
+                continue;
+            plan.renames.append(track);
+        }
+        return plan;
+    }));
+}
+
+void IdNamer::applyRenameChunk()
+{
+    const int end = qMin(renameAt_ + 1, renameQueue_.size());
+    for (; renameAt_ < end; ++renameAt_) {
+        const Track track = renameQueue_.at(renameAt_);
+        const QString before = track.path;
+        commitIdentity(library_, player_, track, true, true, nullptr);
+        const Track after = library_->trackById(track.id);
+        if (after.id > 0 && QFileInfo(after.path).absoluteFilePath() != QFileInfo(before).absoluteFilePath())
+            ++groomRenamed_;
+    }
+    if (renameAt_ < renameQueue_.size()) {
+        QTimer::singleShot(40, this, [this] { applyRenameChunk(); });
+        return;
+    }
+    renameQueue_.clear();
+    if (groomNumbered_ > 0 || groomRenamed_ > 0)
+        library_->refresh();
+    finishGroom();
+}
+
+void IdNamer::finishGroom()
+{
+    grooming_ = false;
+    const bool named = groomNumbered_ > 0 || groomRenamed_ > 0;
+    const bool spent = settings_->identifyDay() == QDate::currentDate().toString(Qt::ISODate);
+    if (named) {
+        const int count = qMax(groomNumbered_, groomRenamed_);
+        emit statusChanged(QStringLiteral("Named %1 series file%2 from the folder")
+                               .arg(count)
+                               .arg(count == 1 ? QString() : QStringLiteral("s")));
+    }
+    if (!settings_->identifyEnabled() || spent) {
+        if (groomThenAsk_ && spent && !named)
+            emit statusChanged(QStringLiteral("Already looked at one id name today"));
+        else if (!named)
+            emit statusChanged({});
         return;
     }
     startRequest();
@@ -588,7 +684,22 @@ void IdNamer::runNow()
 
 void IdNamer::startRequest()
 {
-    cluster_ = nextCluster(&context_);
+    const QString dbPath = dataDir() + QStringLiteral("/library.db");
+    auto *watcher = new QFutureWatcher<QList<Track>>(this);
+    QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<QList<Track>>::finished, this, [self, watcher] {
+        const QList<Track> all = watcher->result();
+        watcher->deleteLater();
+        if (!self)
+            return;
+        self->cluster_ = self->nextCluster(all, &self->context_);
+        self->postIdentifyRequest();
+    });
+    watcher->setFuture(QtConcurrent::run([dbPath] { return readTracksKind(dbPath, QString()); }));
+}
+
+void IdNamer::postIdentifyRequest()
+{
     if (cluster_.isEmpty()) {
         remember(QStringLiteral("No id-named files left to look at."), false);
         return;
@@ -727,6 +838,79 @@ int rulesSelfCheck()
         fail(errors, QStringLiteral("series parse %1 s%2 e%3").arg(episode.showName).arg(episode.season).arg(episode.episode));
     if (!episode.title.isEmpty())
         fail(errors, QStringLiteral("quality leaked into title [%1]").arg(episode.title));
+
+    Track foldered;
+    foldered.kind = QStringLiteral("video");
+    foldered.path = QStringLiteral("/tv/Married With Children/Season 1/03 - Pilot.mkv");
+    applySeriesFromFileName(foldered);
+    if (foldered.showName != QLatin1String("Married With Children") || foldered.season != 1 || foldered.episode != 3)
+        fail(errors, QStringLiteral("folder series %1 s%2 e%3").arg(foldered.showName).arg(foldered.season).arg(foldered.episode));
+
+    Track dotted;
+    dotted.kind = QStringLiteral("video");
+    dotted.path = QStringLiteral("/tv/Married.with.Children/S01E02.mkv");
+    applySeriesFromFileName(dotted);
+    if (dotted.showName != QLatin1String("Married with Children") || dotted.season != 1 || dotted.episode != 2)
+        fail(errors, QStringLiteral("parent series %1 s%2 e%3").arg(dotted.showName).arg(dotted.season).arg(dotted.episode));
+
+    if (showGroupKey(QStringLiteral("Married with Children")) != showGroupKey(QStringLiteral("Married With Children")))
+        fail(errors, QStringLiteral("show case key"));
+
+    Track sails;
+    sails.kind = QStringLiteral("video");
+    sails.path = QStringLiteral("/home/a/Videos/Series/BlackSails/1.mp4");
+    applySeriesFromFileName(sails);
+    if (sails.showName != QLatin1String("Black Sails") || sails.season != 1 || sails.episode != 1)
+        fail(errors, QStringLiteral("series folder %1 s%2 e%3").arg(sails.showName).arg(sails.season).arg(sails.episode));
+
+    Track reign;
+    reign.kind = QStringLiteral("video");
+    reign.path = QStringLiteral("/home/a/Videos/Series/Reign/S1/1.mp4");
+    applySeriesFromFileName(reign);
+    if (reign.showName != QLatin1String("Reign") || reign.season != 1 || reign.episode != 1)
+        fail(errors, QStringLiteral("reign %1 s%2 e%3").arg(reign.showName).arg(reign.season).arg(reign.episode));
+
+    Track yes;
+    yes.kind = QStringLiteral("video");
+    yes.path = QStringLiteral("/media/v/series/Yes (Prime) Minister/Yes Prime Minister Series 2/Yes Prime Minister Series 2 Episode 1 - Man Overboard.avi");
+    applySeriesFromFileName(yes);
+    if (yes.showName != QLatin1String("Yes (Prime) Minister") || yes.season != 2 || yes.episode != 1)
+        fail(errors, QStringLiteral("series word %1 s%2 e%3").arg(yes.showName).arg(yes.season).arg(yes.episode));
+
+    Track potter;
+    potter.kind = QStringLiteral("video");
+    potter.path = QStringLiteral("/home/a/Videos/Movies/HarryPotter/hp1.mp4");
+    applySeriesFromFileName(potter);
+    if (!potter.showName.isEmpty() || potter.episode != 0)
+        fail(errors, QStringLiteral("movie folder looked like a show [%1]").arg(potter.showName));
+
+    if (!pathIsMusicVideo(QStringLiteral("/home/a/Music/Andrea/cover.mp4"))
+        || pathIsMusicVideo(QStringLiteral("/home/a/Videos/Series/Reign/S1/1.mp4")))
+        fail(errors, QStringLiteral("music video path"));
+    if (trackShelf(QStringLiteral("/data/clips/song.mp4"), QStringLiteral("video"), QStringLiteral("music_videos"))
+        != QLatin1String("music"))
+        fail(errors, QStringLiteral("music video role"));
+    if (polishCase(QStringLiteral("Princess of Mars")) != QLatin1String("Princess of Mars"))
+        fail(errors, QStringLiteral("mixed case changed"));
+    Track upper;
+    upper.kind = QStringLiteral("video");
+    upper.showName = QStringLiteral("Married With Children");
+    upper.season = 5;
+    upper.episode = 1;
+    Track lower;
+    lower.kind = QStringLiteral("video");
+    lower.showName = QStringLiteral("Married with Children");
+    lower.season = 5;
+    lower.episode = 2;
+    if (showGroupKey(seriesHint(upper).show) != showGroupKey(seriesHint(lower).show))
+        fail(errors, QStringLiteral("show case hint"));
+
+    Track movie;
+    movie.kind = QStringLiteral("video");
+    movie.path = QStringLiteral("/videos/Movies/The Matrix/The Matrix.mkv");
+    applySeriesFromFileName(movie);
+    if (!movie.showName.isEmpty() || movie.season != 0 || movie.episode != 0)
+        fail(errors, QStringLiteral("movie looked like a show [%1]").arg(movie.showName));
 
     Track named;
     named.kind = QStringLiteral("video");

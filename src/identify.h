@@ -49,8 +49,12 @@ signals:
 private:
     bool groom();
     int renameKnownIds();
-    QList<Track> nextCluster(QList<Track> *context) const;
+    void beginGroom(bool thenAsk);
+    void applyRenameChunk();
+    void finishGroom();
+    QList<Track> nextCluster(const QList<Track> &all, QList<Track> *context) const;
     void startRequest();
+    void postIdentifyRequest();
     void handleReply(QNetworkReply *reply);
     void remember(const QString &note, bool spendDay);
 
@@ -60,6 +64,12 @@ private:
     QNetworkAccessManager *network_ = nullptr;
     QList<Track> cluster_;
     QList<Track> context_;
+    QList<Track> renameQueue_;
+    int renameAt_ = 0;
+    int groomNumbered_ = 0;
+    int groomRenamed_ = 0;
+    bool grooming_ = false;
+    bool groomThenAsk_ = false;
     bool busy_ = false;
     bool failedThisSession_ = false;
 };

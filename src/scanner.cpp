@@ -75,8 +75,19 @@ bool Scanner::startScan(const QList<Root> &roots,
     cancel_.store(false);
     lastProgressMs_ = 0;
     lastPercent_ = -2;
+    {
+        QMutexLocker lock(&progressMutex_);
+        progress_ = {};
+        progress_.percent = -1;
+    }
     start();
     return true;
+}
+
+Scanner::Progress Scanner::progressSnapshot() const
+{
+    QMutexLocker lock(&progressMutex_);
+    return progress_;
 }
 
 void Scanner::requestCancel()
@@ -91,13 +102,30 @@ bool Scanner::skipDirName(const QString &name) const
     return skip_.contains(name);
 }
 
-void Scanner::noteProgress(int percent, const QString &detail)
+void Scanner::noteProgress(int percent, int done, int total, const QString &filePath)
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (percent == lastPercent_ && lastProgressMs_ != 0 && now - lastProgressMs_ < 280)
+    if (percent == lastPercent_ && lastProgressMs_ != 0 && now - lastProgressMs_ < 200)
         return;
     lastPercent_ = percent;
     lastProgressMs_ = now;
+    const QString file = filePath.isEmpty() ? QString() : QFileInfo(filePath).fileName();
+    {
+        QMutexLocker lock(&progressMutex_);
+        progress_.percent = percent;
+        progress_.done = done;
+        progress_.total = total;
+        progress_.file = file;
+        if (percent >= 0 && progress_.startedMs == 0)
+            progress_.startedMs = now;
+    }
+    QString detail;
+    if (percent < 0)
+        detail = QStringLiteral("Counting · %1 files\n%2").arg(done).arg(filePath);
+    else if (total > 0)
+        detail = QStringLiteral("%1% · %2 of %3\n%4").arg(percent).arg(done).arg(total).arg(filePath);
+    else
+        detail = QStringLiteral("%1%").arg(percent);
     emit progress(percent, detail);
 }
 
@@ -144,11 +172,8 @@ bool Scanner::collectRoot(const Root &root, const QHash<QString, QPair<qint64, q
                 || knownFile->second != file.size;
             seen->append(file.path);
             files->append(file);
-            if ((files->size() % 40) == 0) {
-                noteProgress(-1, QStringLiteral("Counting · %1 files\n%2")
-                                      .arg(files->size())
-                                      .arg(file.path));
-            }
+            if ((files->size() % 40) == 0)
+                noteProgress(-1, files->size(), 0, file.path);
         }
     }
     return cancel_.load();
@@ -185,11 +210,6 @@ bool Scanner::ingestRoot(const Root &root, const QList<MediaFile> &files, QSqlDa
         }
         ++(*done);
         const int percent = total <= 0 ? 0 : int((qint64(*done) * 100) / total);
-        const QString detail = QStringLiteral("%1% · %2 of %3\n%4")
-                                   .arg(percent)
-                                   .arg(*done)
-                                   .arg(total)
-                                   .arg(file.path);
         if (file.changed) {
             Track track = readTrackTags(file.path, artworkDir_);
             track.folderId = root.id;
@@ -197,7 +217,7 @@ bool Scanner::ingestRoot(const Root &root, const QList<MediaFile> &files, QSqlDa
             if (batch.size() >= 24)
                 flush();
         }
-        noteProgress(percent, detail);
+        noteProgress(percent, *done, total, file.path);
     }
     flush();
     return cancel_.load();
@@ -278,6 +298,9 @@ void Scanner::run()
             if (db.isOpen()) {
                 if (!forgetMissingTracks(db, job.root.id, job.seen, &cancel_))
                     cancelled = cancel_.load();
+                // Checkpoint here, on this worker, so the window never runs one.
+                QSqlQuery checkpoint(db);
+                checkpoint.exec(QStringLiteral("PRAGMA wal_checkpoint(PASSIVE)"));
             } else {
                 emit folderScanned(job.root.id, job.seen);
             }
@@ -290,8 +313,7 @@ void Scanner::run()
     }
 
     if (!cancelled)
-        noteProgress(100, total == 0 ? QStringLiteral("No media files")
-                                     : QStringLiteral("100% · %1 files").arg(total));
+        noteProgress(100, total, total, {});
 
     if (db.isOpen()) {
         QSqlQuery pragma(db);

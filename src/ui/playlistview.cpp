@@ -197,4 +197,5 @@ void PlaylistView::showCurrent()
     default: tracks = library_->playlistTracks(selectedId_); break;
     }
     model_->setTracks(tracks);
+    reapplySort(table_);
 }

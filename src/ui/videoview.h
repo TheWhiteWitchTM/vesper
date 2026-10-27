@@ -5,6 +5,8 @@
 #include <QWidget>
 
 class Library;
+class QResizeEvent;
+class QShowEvent;
 class TrackModel;
 class TrackProxy;
 
@@ -14,19 +16,25 @@ public:
     explicit VideoView(Library *library, QWidget *parent = nullptr);
     void reload();
     void updateTrack(const Track &track);
+    void noteProbe(qint64 id, qint64 durationMs);
 
 signals:
     void playTracks(const QList<Track> &tracks, int index);
     void contextTracks(const QList<Track> &tracks, const QPoint &globalPos);
     void shuffleRequested();
 
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+
 private:
     void applyMode(int mode);
-    void showEpisodes(const QString &show);
+    void showEpisodes(const QString &show, const QString &title);
     void present();
     void prepareTable();
+    void fitColumns();
+    void requestLoad();
     QList<Track> shownTracks() const;
-    QList<Track> videos() const;
 
     Library *library_ = nullptr;
     TrackModel *model_ = nullptr;
@@ -40,6 +48,8 @@ private:
     class QPushButton *allButton_ = nullptr;
     int mode_ = 0;
     QString showKey_;
+    QString showTitle_;
     QList<Track> cached_;
     bool cacheReady_ = false;
+    int loadToken_ = 0;
 };

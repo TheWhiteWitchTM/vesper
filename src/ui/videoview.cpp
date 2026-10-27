@@ -3,32 +3,33 @@
 #include "library.h"
 #include "ui/trackmodel.h"
 
+#include <QFont>
+#include <QFutureWatcher>
+#include <QHash>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollBar>
+#include <QShowEvent>
+#include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyledItemDelegate>
 #include <QTableView>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QtConcurrent>
 
 #include <algorithm>
 
 namespace {
 
-QString showGroup(const Track &track)
+bool isSeries(const Track &track)
 {
     if (!track.showName.trimmed().isEmpty())
-        return track.showName.trimmed();
-    if (track.season > 0 || track.episode > 0)
-        return QStringLiteral("Unknown show");
-    return {};
-}
-
-bool isEpisode(const Track &track)
-{
-    return !showGroup(track).isEmpty();
+        return true;
+    return track.season > 0 || track.episode > 0;
 }
 
 void setCountCell(QTableWidget *table, int row, int column, int value)
@@ -39,6 +40,23 @@ void setCountCell(QTableWidget *table, int row, int column, int value)
     item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
     table->setItem(row, column, item);
 }
+
+// The title is the row. A larger face keeps it readable when the pane is narrow.
+class TitleDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        if (index.column() != 2)
+            return;
+        QFont font = option->font;
+        font.setPointSize(15);
+        font.setWeight(QFont::Medium);
+        option->font = font;
+    }
+};
 
 } // namespace
 
@@ -61,7 +79,7 @@ VideoView::VideoView(Library *library, QWidget *parent)
     modes->addWidget(allButton_);
     modes->addStretch();
     modes->addWidget(shuffle);
-    heading_ = new QLabel(QStringLiteral("Movies are videos that are not part of a show."));
+    heading_ = new QLabel(QStringLiteral("Movies. Search still finds the artist and genre."));
     heading_->setObjectName(QStringLiteral("hint"));
 
     model_ = new TrackModel(this);
@@ -69,7 +87,9 @@ VideoView::VideoView(Library *library, QWidget *parent)
     proxy_ = new TrackProxy(this);
     proxy_->setSourceModel(model_);
     table_ = new QTableView;
+    table_->setObjectName(QStringLiteral("videoTable"));
     table_->setModel(proxy_);
+    table_->setItemDelegate(new TitleDelegate(table_));
     prepareTable();
 
     shows_ = new QTableWidget;
@@ -107,7 +127,7 @@ VideoView::VideoView(Library *library, QWidget *parent)
     connect(shows_, &QTableWidget::cellClicked, this, [this](int row, int) {
         QTableWidgetItem *item = shows_->item(row, 0);
         if (item)
-            showEpisodes(item->data(Qt::UserRole).toString());
+            showEpisodes(item->data(Qt::UserRole).toString(), item->text());
     });
     connect(table_, &QTableView::doubleClicked, this, [this](const QModelIndex &index) {
         const QList<Track> tracks = shownTracks();
@@ -155,24 +175,62 @@ void VideoView::prepareTable()
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->setAlternatingRowColors(true);
     table_->setShowGrid(false);
+    table_->setWordWrap(false);
+    table_->setTextElideMode(Qt::ElideRight);
+    table_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     table_->setSortingEnabled(true);
     table_->verticalHeader()->hide();
     table_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    table_->verticalHeader()->setDefaultSectionSize(38);
-    table_->horizontalHeader()->setStretchLastSection(false);
-    table_->horizontalHeader()->setHighlightSections(false);
-    table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Interactive);
-    table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Interactive);
+    table_->verticalHeader()->setDefaultSectionSize(46);
+    QHeaderView *header = table_->horizontalHeader();
+    header->setStretchLastSection(false);
+    header->setHighlightSections(false);
+    header->setSectionsMovable(false);
+    header->setMinimumSectionSize(28);
+    // Show, genre, and the content label used to keep their own columns.
+    // Those widths ate the row, so the title collapsed to one letter.
+    // They stay on the tooltip and in search.
+    for (int column = 0; column < 8; ++column)
+        header->setSectionResizeMode(column, QHeaderView::Fixed);
+    header->setSectionResizeMode(2, QHeaderView::Stretch);
     table_->setColumnWidth(0, 36);
-    table_->setColumnWidth(1, 78);
-    table_->setColumnWidth(3, 200);
-    table_->setColumnWidth(4, 160);
+    table_->setColumnWidth(1, 88);
     table_->setColumnWidth(5, 84);
-    table_->setColumnWidth(6, 46);
-    table_->setColumnWidth(7, 64);
+    table_->setColumnWidth(6, 44);
+    table_->setColumnHidden(3, true);
+    table_->setColumnHidden(4, true);
+    table_->setColumnHidden(7, true);
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
     table_->sortByColumn(2, Qt::AscendingOrder);
+}
+
+void VideoView::fitColumns()
+{
+    if (!table_)
+        return;
+    table_->setColumnHidden(3, true);
+    table_->setColumnHidden(4, true);
+    table_->setColumnHidden(7, true);
+    const int width = table_->viewport()->width();
+    if (width < 80)
+        return;
+    // Side columns stay only while the title still has most of the row.
+    const bool tight = width < 720;
+    table_->setColumnHidden(5, tight);
+    table_->setColumnHidden(6, tight);
+    table_->setColumnHidden(1, tight && mode_ != 3);
+}
+
+void VideoView::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    fitColumns();
+}
+
+void VideoView::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    fitColumns();
 }
 
 QList<Track> VideoView::shownTracks() const
@@ -186,83 +244,146 @@ QList<Track> VideoView::shownTracks() const
     return tracks;
 }
 
-QList<Track> VideoView::videos() const
-{
-    return library_->tracks(QStringLiteral("video"));
-}
-
 void VideoView::applyMode(int mode)
 {
     mode_ = mode;
     showKey_.clear();
+    showTitle_.clear();
     moviesButton_->setChecked(mode == 0);
     showsButton_->setChecked(mode == 1);
     allButton_->setChecked(mode == 2);
-    if (!cacheReady_) {
-        cached_ = videos();
-        cacheReady_ = true;
-    }
-    present();
+    if (!cacheReady_)
+        requestLoad();
+    else
+        present();
 }
 
-void VideoView::showEpisodes(const QString &show)
+void VideoView::showEpisodes(const QString &show, const QString &title)
 {
     mode_ = 3;
     showKey_ = show;
+    showTitle_ = title.isEmpty() ? show : title;
     moviesButton_->setChecked(false);
     showsButton_->setChecked(true);
     allButton_->setChecked(false);
-    if (!cacheReady_) {
-        cached_ = videos();
+    if (!cacheReady_)
+        requestLoad();
+    else
+        present();
+}
+
+void VideoView::requestLoad()
+{
+    const int token = ++loadToken_;
+    if (heading_ && !cacheReady_)
+        heading_->setText(QStringLiteral("Loading…"));
+    const QString dbPath = dataDir() + QStringLiteral("/library.db");
+    auto *watcher = new QFutureWatcher<QList<Track>>(this);
+    connect(watcher, &QFutureWatcher<QList<Track>>::finished, this, [this, watcher, token] {
+        const QList<Track> tracks = watcher->result();
+        watcher->deleteLater();
+        if (token != loadToken_)
+            return;
+        cached_ = tracks;
         cacheReady_ = true;
-    }
-    present();
+        present();
+    });
+    // Read and classify off the window thread. Doing this here used to freeze
+    // the movie list for the whole query.
+    watcher->setFuture(QtConcurrent::run([dbPath] {
+        QList<Track> tracks = readTracksKind(dbPath, QStringLiteral("video"));
+        for (Track &track : tracks) {
+            const SeriesHint hint = seriesHint(track);
+            if (track.showName.trimmed().isEmpty())
+                track.showName = hint.show;
+            if (track.season <= 0)
+                track.season = hint.season;
+            if (track.episode <= 0)
+                track.episode = hint.episode;
+        }
+        return tracks;
+    }));
 }
 
 void VideoView::reload()
 {
-    cached_ = videos();
-    cacheReady_ = true;
-    present();
+    cacheReady_ = false;
+    requestLoad();
 }
 
 void VideoView::updateTrack(const Track &track)
 {
+    Track shown = track;
+    for (Track &row : cached_) {
+        if (row.id != track.id)
+            continue;
+        if (shown.showName.trimmed().isEmpty())
+            shown.showName = row.showName;
+        if (shown.season <= 0)
+            shown.season = row.season;
+        if (shown.episode <= 0)
+            shown.episode = row.episode;
+        row = shown;
+        break;
+    }
     if (model_)
-        model_->updateTrack(track);
+        model_->updateTrack(shown);
+}
+
+void VideoView::noteProbe(qint64 id, qint64 durationMs)
+{
+    if (id <= 0 || durationMs <= 0)
+        return;
+    for (Track &row : cached_) {
+        if (row.id == id)
+            row.durationMs = durationMs;
+    }
+    if (model_)
+        model_->noteProbe(id, durationMs);
 }
 
 void VideoView::present()
 {
     const QList<Track> &all = cached_;
     if (mode_ == 1) {
-        QHash<QString, int> counts;
-        QStringList names;
+        struct Bucket {
+            QHash<QString, int> votes;
+            int count = 0;
+        };
+        QHash<QString, Bucket> groups;
+        QStringList keys;
         for (const Track &track : all) {
-            const QString group = showGroup(track);
-            if (group.isEmpty())
+            if (!isSeries(track))
                 continue;
-            if (!counts.contains(group))
-                names.append(group);
-            counts[group] += 1;
+            const QString key = showGroupKey(track.showName.trimmed());
+            if (!groups.contains(key))
+                keys.append(key);
+            Bucket &bucket = groups[key];
+            bucket.count += 1;
+            bucket.votes[track.showName.trimmed()] += 1;
         }
-        names.sort(Qt::CaseInsensitive);
+        QList<QPair<QString, QString>> rows;
+        rows.reserve(keys.size());
+        for (const QString &key : keys)
+            rows.append({preferredSpelling(groups.value(key).votes), key});
+        std::sort(rows.begin(), rows.end(), [](const QPair<QString, QString> &a, const QPair<QString, QString> &b) {
+            return a.first.compare(b.first, Qt::CaseInsensitive) < 0;
+        });
         shows_->setSortingEnabled(false);
         shows_->setUpdatesEnabled(false);
-        shows_->setRowCount(names.size());
-        for (int i = 0; i < names.size(); ++i) {
-            const QString &name = names.at(i);
-            auto *item = new QTableWidgetItem(name);
-            item->setData(Qt::UserRole, name);
+        shows_->setRowCount(rows.size());
+        for (int i = 0; i < rows.size(); ++i) {
+            auto *item = new QTableWidgetItem(rows.at(i).first);
+            item->setData(Qt::UserRole, rows.at(i).second);
             item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
             shows_->setItem(i, 0, item);
-            setCountCell(shows_, i, 1, counts.value(name));
+            setCountCell(shows_, i, 1, groups.value(rows.at(i).second).count);
         }
         shows_->setUpdatesEnabled(true);
         shows_->setSortingEnabled(true);
         shows_->sortByColumn(0, Qt::AscendingOrder);
-        heading_->setText(names.isEmpty()
-                              ? QStringLiteral("No shows yet. A season folder or an S01E02 name files one.")
+        heading_->setText(rows.isEmpty()
+                              ? QStringLiteral("No shows yet. A Series folder, a season folder, or an S01E02 name files one.")
                               : QStringLiteral("Shows, then the episodes inside."));
         stack_->setCurrentWidget(shows_);
         return;
@@ -270,9 +391,9 @@ void VideoView::present()
 
     QList<Track> shown;
     for (const Track &track : all) {
-        if (mode_ == 0 && isEpisode(track))
+        if (mode_ == 0 && isSeries(track))
             continue;
-        if (mode_ == 3 && showGroup(track) != showKey_)
+        if (mode_ == 3 && showGroupKey(track.showName.trimmed()) != showKey_)
             continue;
         shown.append(track);
     }
@@ -284,25 +405,36 @@ void VideoView::present()
                 return a.episode < b.episode;
             return a.displayTitle().compare(b.displayTitle(), Qt::CaseInsensitive) < 0;
         });
+        const QString title = showTitle_.isEmpty() ? showKey_ : showTitle_;
         heading_->setText(QStringLiteral("%1  ·  %2 episode%3")
-                              .arg(showKey_)
+                              .arg(title)
                               .arg(shown.size())
                               .arg(shown.size() == 1 ? QString() : QStringLiteral("s")));
     } else if (mode_ == 0) {
-        heading_->setText(QStringLiteral("Movies are videos that are not part of a show."));
+        heading_->setText(QStringLiteral("Movies. Search still finds the artist and genre."));
     } else {
-        heading_->setText(QStringLiteral("Every video in the library."));
+        heading_->setText(QStringLiteral("Every video. Search still finds the artist, show, and genre."));
     }
     const int scroll = table_->verticalScrollBar()->value();
-    const int sortColumn = table_->horizontalHeader()->sortIndicatorSection();
+    int sortColumn = table_->horizontalHeader()->sortIndicatorSection();
     const Qt::SortOrder sortOrder = table_->horizontalHeader()->sortIndicatorOrder();
+    if (sortColumn == 3 || sortColumn == 4 || sortColumn == 7)
+        sortColumn = 2;
+    table_->setUpdatesEnabled(false);
     table_->setSortingEnabled(false);
+    model_->setIncludeShowInTitle(mode_ == 2);
     model_->setTracks(shown);
     table_->setSortingEnabled(true);
-    if (mode_ == 3)
-        table_->sortByColumn(1, Qt::AscendingOrder);
-    else if (sortColumn >= 0)
-        table_->sortByColumn(sortColumn, sortOrder);
+    {
+        const QSignalBlocker block(table_->horizontalHeader());
+        if (mode_ == 3)
+            table_->horizontalHeader()->setSortIndicator(1, Qt::AscendingOrder);
+        else if (sortColumn >= 0)
+            table_->horizontalHeader()->setSortIndicator(sortColumn, sortOrder);
+    }
+    reapplySort(table_);
     table_->verticalScrollBar()->setValue(scroll);
+    table_->setUpdatesEnabled(true);
+    fitColumns();
     stack_->setCurrentWidget(table_);
 }

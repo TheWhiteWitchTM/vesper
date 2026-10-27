@@ -19,9 +19,9 @@ scripts/bundle-dist.sh
 
 The first window is empty until you add folders. Home has three ways in:
 
-- **Add a folder** keeps that folder and checks it again next time Vesper opens.
-- **Scan home** walks your home directory once and remembers it.
-- **Scan this computer** walks `/` once. It is not repeated every launch.
+- **Add a folder** keeps that folder and checks it again next time Vesper opens. Vesper asks whether it holds music, movies, series, or music videos. Leave it on “decide from the folder name” when the folder is already called Series, Movies, Music, or Musik.
+- **Scan home** walks your home directory once and remembers it. It decides from the folder names.
+- **Scan this computer** walks `/` once. It is not repeated every launch. It decides from the folder names too.
 
 Drop files, folders, or links on the window. `./vesper song.mp3 movie.mp4` and `./vesper ~/Music` do the same thing from a terminal.
 
@@ -35,8 +35,9 @@ Vesper shows up in the app grid as **Vesper** after the desktop file is installe
 - Artwork from the file, a cover next to it, then iTunes Search, MusicBrainz, and the Cover Art Archive. Lyrics from the file or LRCLIB. A short video summary from Wikipedia.
 - Equalizer, sleep timer, speed, subtitles, chapters, screenshots, mini player, always on top.
 - Video opens full screen. The menu, search, and controls hide while it plays, and come back when the pointer moves or rests on an edge.
-- Rename and organize, from Home or Settings. Scene names get a real title and a Movies or Shows folder. Tagged music goes under Artist / Album. Hash names are renamed when the file actually has a title, and left alone when it does not.
-- Songs has a genre, artist, and album browser, plus a G / PG / R label. Video is Movies, Shows, and All. A file can be renamed and retagged from its menu or from the one that is playing.
+- Rename and organize, from Home or Settings. Names in all capitals or all lowercase take title case, and a small word such as of, the, or und stays lowercase. Mixed case is left as it is. When one show is spelled a few ways, the usual spelling wins. Scene names get a real title. The plan uses the container word already in that library, such as Series, Shows, Movies, or Musik. A file under Series is a show: `Series/BlackSails/1.mp4` becomes Black Sails, season 1, episode 1. A movie folder is not treated as a series. Tagged music goes under Artist / Album. Hash names are renamed when the file actually has a title, and left alone when it does not.
+- Songs has a genre, artist, and album browser, plus a G / PG / R label. Video is Movies, Shows, and All. Video files kept in a music folder, or in a folder you marked as music videos, are listed with the songs and still play as video. A file can be renamed and retagged from its menu or from the one that is playing.
+- While a song plays, Now Playing and the bar above the controls show the white witch. She dances, and the gold bars follow the beat. A music video keeps its picture.
 - A folder named `private` labels its files R. Kids mode, on the transport bar or in Settings, makes shuffle play only G.
 - Id-only names are looked at once a day. A season folder is numbered from the show name with no lookup. Anything still cryptic can be sent to Grok when `XAI_API_KEY` is set, or when the key is saved in `~/.config/vesper/xai_key`.
 - Media keys and MPRIS (`org.mpris.MediaPlayer2.vesper`), so the desktop controls work.
@@ -58,4 +59,8 @@ Qt 6 (widgets, sql, dbus, network), TagLib, and libVLC headers come from the sys
 ```bash
 ./vesper --dump-scan /path/to/music
 ./vesper --self-test /path/to/file.mp4
+./vesper --organize-check
+./vesper --refresh-library
+./vesper --organize-plan ~/Videos
+./vesper --organize-apply ~/Videos
 ```

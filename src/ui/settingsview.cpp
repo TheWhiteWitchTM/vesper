@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFrame>
+#include <QSignalBlocker>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -26,6 +27,13 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     title->setObjectName(QStringLiteral("section"));
     folders_ = new QListWidget;
     folders_->setMinimumHeight(140);
+    roleBox_ = new QComboBox;
+    roleBox_->addItem(QStringLiteral("Decide from the folder name"), QString());
+    roleBox_->addItem(QStringLiteral("Music"), QStringLiteral("music"));
+    roleBox_->addItem(QStringLiteral("Movies"), QStringLiteral("movies"));
+    roleBox_->addItem(QStringLiteral("Series"), QStringLiteral("series"));
+    roleBox_->addItem(QStringLiteral("Music videos"), QStringLiteral("music_videos"));
+    roleBox_->setEnabled(false);
     auto *add = new QPushButton(QStringLiteral("Add folder"));
     auto *remove = new QPushButton(QStringLiteral("Remove"));
     auto *rescan = new QPushButton(QStringLiteral("Rescan"));
@@ -62,11 +70,16 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     identifyNote_ = new QLabel(settings_->identifyNote());
     identifyNote_->setObjectName(QStringLiteral("muted"));
     identifyNote_->setWordWrap(true);
+    auto *roleNote = new QLabel(QStringLiteral(
+        "Music videos play as video and are listed with your songs. "
+        "A folder named Series, Movies, Music, or Musik is read from its name when you leave this on decide."));
+    roleNote->setObjectName(QStringLiteral("muted"));
+    roleNote->setWordWrap(true);
     auto *organizeNote = new QLabel(QStringLiteral(
-        "Organize names files into Music / Artist / Album, Movies / Title (Year), "
-        "and Shows / Show / Season. Right-click a file, or the one that is playing, "
-        "to rename it and write the tags. A season folder of id-named episodes is numbered "
-        "from the show name without a lookup."));
+        "Organize keeps the folder word you already use, such as Series, Shows, Movies, or Musik. "
+        "A file under Series is a show. Scene names get a real title. Tagged music goes under Artist / Album. "
+        "Right-click a file, or the one that is playing, to rename it and write the tags. "
+        "A season folder of id-named episodes is numbered from the show name without a lookup."));
     organizeNote->setObjectName(QStringLiteral("muted"));
     organizeNote->setWordWrap(true);
 
@@ -88,7 +101,7 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
         "<b>Space</b> play or pause &nbsp;·&nbsp; <b>← →</b> seek 10s &nbsp;·&nbsp; "
         "<b>Shift + ← →</b> seek 1 min &nbsp;·&nbsp; <b>↑ ↓</b> volume<br>"
         "<b>N</b> next &nbsp;·&nbsp; <b>P</b> previous &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; "
-        "<b>H</b> favorite &nbsp;·&nbsp; <b>F11</b> full screen &nbsp;·&nbsp; <b>0–9</b> jump in the track<br>"
+        "<b>H</b> favorite &nbsp;·&nbsp; <b>F11</b> or double-click the picture for full screen &nbsp;·&nbsp; <b>0–9</b> jump in the track<br>"
         "<b>Ctrl+F</b> search &nbsp;·&nbsp; <b>Ctrl+O</b> open files &nbsp;·&nbsp; "
         "<b>Ctrl+U</b> open a stream &nbsp;·&nbsp; <b>Ctrl+Q</b> quit<br>"
         "Media keys work through the desktop, including on the lock screen controls."));
@@ -115,6 +128,11 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     layout->addWidget(title);
     layout->addWidget(new QLabel(QStringLiteral("Library folders")));
     layout->addWidget(folders_);
+    auto *roleRow = new QHBoxLayout;
+    roleRow->addWidget(new QLabel(QStringLiteral("Folder contains")));
+    roleRow->addWidget(roleBox_, 1);
+    layout->addLayout(roleRow);
+    layout->addWidget(roleNote);
     layout->addLayout(folderButtons);
     layout->addWidget(online);
     layout->addWidget(resume);
@@ -208,6 +226,16 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
         settings_->setAudioDevice(devices_->currentData().toString());
         player_->setAudioDevice(devices_->currentData().toString());
     });
+    connect(folders_, &QListWidget::currentItemChanged, this, [this] { syncRoleBox(); });
+    connect(roleBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        QListWidgetItem *item = folders_->currentItem();
+        if (!item || !roleBox_)
+            return;
+        const QString role = roleBox_->currentData().toString();
+        if (item->data(Qt::UserRole + 1).toString() == role)
+            return;
+        library_->setFolderRole(item->data(Qt::UserRole).toLongLong(), role);
+    });
     connect(skipEdit_, &QLineEdit::editingFinished, this, [this] {
         const QStringList parts = skipEdit_->text().split(',', Qt::SkipEmptyParts);
         QStringList names;
@@ -218,21 +246,66 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
         }
         settings_->setSkipNames(names);
     });
+    reload();
+}
+
+namespace {
+
+QString roleSuffix(const QString &role)
+{
+    if (role == QLatin1String("music"))
+        return QStringLiteral("   ·   Music");
+    if (role == QLatin1String("movies"))
+        return QStringLiteral("   ·   Movies");
+    if (role == QLatin1String("series"))
+        return QStringLiteral("   ·   Series");
+    if (role == QLatin1String("music_videos"))
+        return QStringLiteral("   ·   Music videos");
+    return {};
+}
+
+} // namespace
+
+void SettingsView::syncRoleBox()
+{
+    if (!roleBox_)
+        return;
+    const QSignalBlocker block(roleBox_);
+    QListWidgetItem *item = folders_ ? folders_->currentItem() : nullptr;
+    roleBox_->setEnabled(item != nullptr);
+    const QString role = item ? item->data(Qt::UserRole + 1).toString() : QString();
+    const int found = roleBox_->findData(role);
+    roleBox_->setCurrentIndex(found >= 0 ? found : 0);
 }
 
 void SettingsView::reload()
 {
+    const qint64 keep = folders_->currentItem() ? folders_->currentItem()->data(Qt::UserRole).toLongLong() : 0;
+    folders_->blockSignals(true);
     folders_->clear();
+    int select = 0;
+    int row = 0;
     for (const Folder &folder : library_->folders()) {
-        auto *item = new QListWidgetItem(folder.watchStartup
-                                             ? folder.path
-                                             : folder.path + QStringLiteral("   (not scanned at startup)"));
+        QString text = folder.path;
+        if (!folder.watchStartup)
+            text += QStringLiteral("   (not scanned at startup)");
+        text += roleSuffix(folder.role);
+        auto *item = new QListWidgetItem(text);
         item->setData(Qt::UserRole, folder.id);
+        item->setData(Qt::UserRole + 1, folder.role);
         item->setSizeHint(QSize(0, 32));
         folders_->addItem(item);
+        if (folder.id == keep)
+            select = row;
+        ++row;
     }
+    folders_->blockSignals(false);
+    if (folders_->count() > 0)
+        folders_->setCurrentRow(select);
+    else
+        syncRoleBox();
     const QString current = settings_->audioDevice();
-    devices_->blockSignals(true);
+    const QSignalBlocker blockDevices(devices_);
     devices_->clear();
     devices_->addItem(QStringLiteral("System default"), QString());
     for (const auto &device : player_->audioDevices()) {
@@ -241,7 +314,6 @@ void SettingsView::reload()
     }
     const int found = devices_->findData(current);
     devices_->setCurrentIndex(found >= 0 ? found : 0);
-    devices_->blockSignals(false);
     if (kidsBox_) {
         kidsBox_->blockSignals(true);
         kidsBox_->setChecked(settings_->kidsMode());

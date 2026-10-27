@@ -69,9 +69,18 @@ void MetadataService::setEnabled(bool on)
     }
 }
 
+void MetadataService::hold(bool on)
+{
+    if (held_ == on)
+        return;
+    held_ = on;
+    if (!on)
+        QTimer::singleShot(400, this, &MetadataService::kick);
+}
+
 void MetadataService::kick()
 {
-    if (!enabled_ || busy_ || paused_ || !library_)
+    if (!enabled_ || busy_ || paused_ || held_ || !library_)
         return;
     const QList<Track> next = library_->needsMetadata(1);
     if (next.isEmpty()) {
@@ -92,7 +101,7 @@ void MetadataService::refetch(const Track &track)
 
 QString MetadataService::artKey() const
 {
-    if (job_.isVideo())
+    if (job_.isVideo() && !job_.onMusicShelf())
         return QStringLiteral("video|") + job_.path;
     return QStringLiteral("album|%1|%2").arg(job_.albumKeyArtist().toLower(), job_.displayAlbum().toLower());
 }
@@ -163,7 +172,7 @@ void MetadataService::saveImage(const QByteArray &bytes)
     if (!QFileInfo::exists(path))
         image.save(path, "JPEG", 90);
     job_.artwork = path;
-    if (job_.isVideo())
+    if (job_.isVideo() && !job_.onMusicShelf())
         library_->updateArtwork(job_.id, path);
     else {
         library_->updateArtwork(job_.id, path);
@@ -174,11 +183,11 @@ void MetadataService::saveImage(const QByteArray &bytes)
 void MetadataService::runStep()
 {
     const bool needArt = job_.artwork.isEmpty();
-    const bool needLyrics = !job_.isVideo() && job_.lyrics.trimmed().isEmpty();
-    const bool needOverview = job_.isVideo() && job_.overview.trimmed().isEmpty();
+    const bool needLyrics = job_.onMusicShelf() && job_.lyrics.trimmed().isEmpty();
+    const bool needOverview = job_.isVideo() && !job_.onMusicShelf() && job_.overview.trimmed().isEmpty();
 
     if (step_ == Step::Sibling) {
-        if (needArt && !job_.isVideo()) {
+        if (needArt && job_.onMusicShelf()) {
             const QString existing = library_->albumArtwork(job_.albumKeyArtist(), job_.displayAlbum());
             if (!existing.isEmpty()) {
                 job_.artwork = existing;

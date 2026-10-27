@@ -234,6 +234,70 @@ int runSelfTest(const QString &file)
     return 0;
 }
 
+int runRefreshLibrary()
+{
+    Library library;
+    if (!library.open()) {
+        std::fprintf(stderr, "%s\n", qPrintable(library.lastError()));
+        return 1;
+    }
+    const QString note = library.reclassify();
+    const LibraryStats stats = library.stats();
+    if (note.isEmpty())
+        std::printf("already current\n");
+    else
+        std::printf("%s\n", qPrintable(note));
+    std::printf("%d songs, %d videos\n", stats.audio, stats.video);
+    return 0;
+}
+
+int runOrganize(const QString &dir, bool apply)
+{
+    const QString root = QFileInfo(dir).absoluteFilePath();
+    if (!QFileInfo(root).isDir()) {
+        std::fprintf(stderr, "No such folder: %s\n", qPrintable(root));
+        return 1;
+    }
+    const QList<OrganizeItem> items = planOrganization(root, false);
+    int planned = 0;
+    int skipped = 0;
+    for (const OrganizeItem &item : items) {
+        if (item.blocked || item.to.isEmpty() || QFileInfo(item.to).absoluteFilePath() == QFileInfo(item.from).absoluteFilePath()) {
+            ++skipped;
+            if (!item.reason.isEmpty())
+                std::printf("skip %s (%s)\n", qPrintable(item.from), qPrintable(item.reason));
+            continue;
+        }
+        ++planned;
+        std::printf("%s\n  -> %s\n", qPrintable(item.from), qPrintable(item.to));
+    }
+    std::printf("%d to rename, %d left as they are\n", planned, skipped);
+    if (!apply)
+        return 0;
+
+    Library library;
+    if (!library.open()) {
+        std::fprintf(stderr, "%s\n", qPrintable(library.lastError()));
+        return 1;
+    }
+    int moved = 0;
+    int failed = 0;
+    for (const OrganizeItem &item : items) {
+        if (item.blocked || item.to.isEmpty() || !item.selected)
+            continue;
+        QString error;
+        if (!moveMediaWithSidecars(item.from, item.to, &error)) {
+            std::fprintf(stderr, "%s\n", qPrintable(error));
+            ++failed;
+            continue;
+        }
+        library.relocateTrack(item.from, item.to);
+        ++moved;
+    }
+    std::printf("renamed %d\n", moved);
+    return failed == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -261,9 +325,20 @@ int main(int argc, char *argv[])
                                  QStringLiteral("dir"));
     QCommandLineOption organizeCheck(QStringLiteral("organize-check"),
                                       QStringLiteral("Check media-name parsing and a sample rename plan."));
+    QCommandLineOption refreshLibrary(QStringLiteral("refresh-library"),
+                                       QStringLiteral("Reclassify shows and music videos already in the library."));
+    QCommandLineOption organizePlan(QStringLiteral("organize-plan"),
+                                     QStringLiteral("Print a rename plan for one folder. Nothing is moved."),
+                                     QStringLiteral("dir"));
+    QCommandLineOption organizeApply(QStringLiteral("organize-apply"),
+                                      QStringLiteral("Rename files in one folder from the plan and update the library."),
+                                      QStringLiteral("dir"));
     parser.addOption(selfTest);
     parser.addOption(dumpScan);
     parser.addOption(organizeCheck);
+    parser.addOption(refreshLibrary);
+    parser.addOption(organizePlan);
+    parser.addOption(organizeApply);
     parser.process(app);
 
     if (parser.isSet(organizeCheck)) {
@@ -275,6 +350,12 @@ int main(int argc, char *argv[])
         return runSelfTest(parser.value(selfTest));
     if (parser.isSet(dumpScan))
         return runDumpScan(parser.value(dumpScan));
+    if (parser.isSet(refreshLibrary))
+        return runRefreshLibrary();
+    if (parser.isSet(organizePlan))
+        return runOrganize(parser.value(organizePlan), false);
+    if (parser.isSet(organizeApply))
+        return runOrganize(parser.value(organizeApply), true);
 
     const QStringList paths = parser.positionalArguments();
     if (handOff(paths))

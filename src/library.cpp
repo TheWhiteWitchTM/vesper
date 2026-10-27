@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QSqlError>
 #include <QSqlRecord>
+#include <QThread>
 #include <QTimer>
 #include <QVariant>
 
@@ -14,8 +15,8 @@ QString listSelect(const QString &tail)
                "SELECT id, folder_id, path, kind, title, artist, album, album_artist, genre, "
                "year, track_no, disc_no, duration_ms, bitrate, file_size, mtime, artwork, "
                "favorite, rating, play_count, last_played, position_ms, width, height, "
-               "date_added, meta_tried, content, show_name, season, episode, id_lookup, id_lookup_at "
-               "FROM tracks ")
+               "date_added, meta_tried, content, show_name, season, episode, id_lookup, id_lookup_at, "
+               "shelf FROM tracks ")
         + tail;
 }
 
@@ -52,8 +53,18 @@ bool Library::open()
     QSqlQuery q(db_);
     q.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
     q.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-    q.exec(QStringLiteral("PRAGMA busy_timeout=4000"));
+    // Wait briefly, then give up. A multi-second wait here froze the movie list
+    // whenever the scanner held a write lock.
+    q.exec(QStringLiteral("PRAGMA busy_timeout=400"));
+    // A checkpoint runs on the connection that triggers it. Leaving this at the
+    // default made the window thread checkpoint the scan's writes and freeze.
+    q.exec(QStringLiteral("PRAGMA wal_autocheckpoint=0"));
     migrate();
+    QSqlQuery version(db_);
+    version.prepare(QStringLiteral("SELECT value FROM meta WHERE key='classify_version'"));
+    version.exec();
+    if (!version.next() || version.value(0).toString() != QLatin1String("1"))
+        reclassify();
     return true;
 }
 
@@ -113,6 +124,12 @@ void Library::migrate()
     }
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tracks_content ON tracks(content)"));
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tracks_show ON tracks(show_name)"));
+    if (!tableHasColumn(db_, QStringLiteral("tracks"), QStringLiteral("shelf")))
+        q.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN shelf TEXT"));
+    if (!tableHasColumn(db_, QStringLiteral("folders"), QStringLiteral("role")))
+        q.exec(QStringLiteral("ALTER TABLE folders ADD COLUMN role TEXT"));
+    q.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"));
+    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tracks_shelf ON tracks(shelf)"));
     QSqlQuery backfill(db_);
     if (backfill.exec(QStringLiteral("SELECT id, path, COALESCE(content, '') FROM tracks"))) {
         while (backfill.next()) {
@@ -153,26 +170,29 @@ QList<Folder> Library::folders() const
 {
     QList<Folder> out;
     QSqlQuery q(db_);
-    q.exec(QStringLiteral("SELECT id, path, watch_startup FROM folders ORDER BY path COLLATE NOCASE"));
+    q.exec(QStringLiteral("SELECT id, path, watch_startup, IFNULL(role, '') FROM folders ORDER BY path COLLATE NOCASE"));
     while (q.next()) {
         Folder f;
         f.id = q.value(0).toLongLong();
         f.path = q.value(1).toString();
         f.watchStartup = q.value(2).toInt() != 0;
+        f.role = q.value(3).toString();
         out.append(f);
     }
     return out;
 }
 
-qint64 Library::addFolder(const QString &path, bool watchStartup)
+qint64 Library::addFolder(const QString &path, bool watchStartup, const QString &role)
 {
     const QString clean = cleanDirPath(path);
     QSqlQuery q(db_);
     q.prepare(QStringLiteral(
-        "INSERT INTO folders(path, watch_startup) VALUES(?, ?) "
-        "ON CONFLICT(path) DO UPDATE SET watch_startup=excluded.watch_startup"));
+        "INSERT INTO folders(path, watch_startup, role) VALUES(?, ?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET watch_startup=excluded.watch_startup, "
+        "role=CASE WHEN excluded.role<>'' THEN excluded.role ELSE folders.role END"));
     q.addBindValue(clean);
     q.addBindValue(watchStartup ? 1 : 0);
+    q.addBindValue(role);
     if (!q.exec()) {
         error_ = q.lastError().text();
         return 0;
@@ -186,6 +206,18 @@ qint64 Library::addFolder(const QString &path, bool watchStartup)
         id = idq.value(0).toLongLong();
     emit foldersChanged();
     return id;
+}
+
+void Library::setFolderRole(qint64 id, const QString &role)
+{
+    QSqlQuery q(db_);
+    q.prepare(QStringLiteral("UPDATE folders SET role=? WHERE id=?"));
+    q.addBindValue(role);
+    q.addBindValue(id);
+    if (!q.exec())
+        return;
+    reclassify();
+    emit foldersChanged();
 }
 
 void Library::removeFolder(qint64 id)
@@ -235,8 +267,8 @@ bool writeTrackBatch(QSqlDatabase &db, const QList<Track> &tracks, QString *erro
         "INSERT INTO tracks ("
         " folder_id, path, kind, title, artist, album, album_artist, genre,"
         " year, track_no, disc_no, duration_ms, bitrate, file_size, mtime,"
-        " artwork, lyrics, width, height, date_added, content, show_name, season, episode) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        " artwork, lyrics, width, height, date_added, content, show_name, season, episode, shelf) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(path) DO UPDATE SET "
         " folder_id=COALESCE(excluded.folder_id, tracks.folder_id),"
         " kind=excluded.kind,"
@@ -259,9 +291,13 @@ bool writeTrackBatch(QSqlDatabase &db, const QList<Track> &tracks, QString *erro
         " content=CASE WHEN tracks.content IS NOT NULL AND tracks.content<>'' THEN tracks.content"
         "              WHEN excluded.content IS NOT NULL AND excluded.content<>'' THEN excluded.content"
         "              ELSE COALESCE(tracks.content, '') END,"
-        " show_name=CASE WHEN excluded.show_name<>'' THEN excluded.show_name ELSE tracks.show_name END,"
-        " season=CASE WHEN excluded.season>0 THEN excluded.season ELSE tracks.season END,"
-        " episode=CASE WHEN excluded.episode>0 THEN excluded.episode ELSE tracks.episode END");
+        " show_name=CASE WHEN excluded.shelf='music' THEN ''"
+        "              WHEN excluded.show_name<>'' THEN excluded.show_name ELSE tracks.show_name END,"
+        " season=CASE WHEN excluded.shelf='music' THEN 0"
+        "             WHEN excluded.season>0 THEN excluded.season ELSE tracks.season END,"
+        " episode=CASE WHEN excluded.shelf='music' THEN 0"
+        "              WHEN excluded.episode>0 THEN excluded.episode ELSE tracks.episode END,"
+        " shelf=excluded.shelf");
     if (!q.prepare(sql)) {
         if (error)
             *error = q.lastError().text();
@@ -269,12 +305,22 @@ bool writeTrackBatch(QSqlDatabase &db, const QList<Track> &tracks, QString *erro
         return false;
     }
     const qint64 now = QDateTime::currentSecsSinceEpoch();
+    QHash<qint64, QPair<QString, QString>> folderHints;
+    {
+        QSqlQuery folders(db);
+        if (folders.exec(QStringLiteral("SELECT id, path, IFNULL(role, '') FROM folders"))) {
+            while (folders.next())
+                folderHints.insert(folders.value(0).toLongLong(),
+                                   {folders.value(1).toString(), folders.value(2).toString()});
+        }
+    }
     for (const Track &incoming : tracks) {
         Track t = incoming;
         t.content = normalizeContent(t.content);
         if (pathIsPrivate(t.path))
             t.content = QStringLiteral("R");
-        applySeriesFromFileName(t);
+        const auto hint = folderHints.value(t.folderId);
+        applyLibraryPlacement(t, hint.second, hint.first);
         q.bindValue(0, t.folderId > 0 ? QVariant(t.folderId) : QVariant());
         q.bindValue(1, t.path);
         q.bindValue(2, t.kind);
@@ -299,6 +345,7 @@ bool writeTrackBatch(QSqlDatabase &db, const QList<Track> &tracks, QString *erro
         q.bindValue(21, t.showName);
         q.bindValue(22, t.season);
         q.bindValue(23, t.episode);
+        q.bindValue(24, t.shelf);
         if (!q.exec()) {
             if (error)
                 *error = q.lastError().text();
@@ -363,7 +410,9 @@ QHash<QString, QPair<qint64, qint64>> knownTrackFiles(const QSqlDatabase &db, qi
     return out;
 }
 
-Track Library::trackFromQuery(const QSqlQuery &q) const
+namespace {
+
+Track trackFromRow(const QSqlQuery &q)
 {
     Track t;
     t.id = q.value(QStringLiteral("id")).toLongLong();
@@ -400,9 +449,70 @@ Track Library::trackFromQuery(const QSqlQuery &q) const
     t.episode = q.value(QStringLiteral("episode")).toInt();
     t.idLookup = q.value(QStringLiteral("id_lookup")).toInt();
     t.idLookupAt = q.value(QStringLiteral("id_lookup_at")).toLongLong();
+    if (q.record().contains(QStringLiteral("shelf")))
+        t.shelf = q.value(QStringLiteral("shelf")).toString();
     if (q.record().contains(QStringLiteral("item_id")))
         t.playlistItemId = q.value(QStringLiteral("item_id")).toLongLong();
     return t;
+}
+
+} // namespace
+
+Track Library::trackFromQuery(const QSqlQuery &q) const
+{
+    return trackFromRow(q);
+}
+
+QList<Track> readTracksKind(const QString &databasePath, const QString &kind)
+{
+    QList<Track> out;
+    if (databasePath.isEmpty())
+        return out;
+    const QString conn = QStringLiteral("vesper-read-%1").arg(quint64(QThread::currentThreadId()));
+    {
+        QSqlDatabase db = QSqlDatabase::contains(conn)
+            ? QSqlDatabase::database(conn)
+            : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        if (!db.isOpen()) {
+            db.setDatabaseName(databasePath);
+            if (!db.open())
+                return out;
+            QSqlQuery pragma(db);
+            pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            pragma.exec(QStringLiteral("PRAGMA query_only=ON"));
+            pragma.exec(QStringLiteral("PRAGMA busy_timeout=8000"));
+            pragma.exec(QStringLiteral("PRAGMA wal_autocheckpoint=0"));
+        }
+        QString tail;
+        QVariantList binds;
+        if (kind.isEmpty()) {
+            tail = QStringLiteral(
+                "ORDER BY kind, artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE");
+        } else if (kind == QLatin1String("audio")) {
+            tail = QStringLiteral(
+                "WHERE (kind='audio' OR IFNULL(shelf,'')='music') "
+                "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE");
+        } else if (kind == QLatin1String("video")) {
+            tail = QStringLiteral(
+                "WHERE kind='video' AND IFNULL(shelf,'')<>'music' "
+                "ORDER BY title COLLATE NOCASE");
+        } else {
+            tail = QStringLiteral(
+                "WHERE kind=? "
+                "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE");
+            binds.append(kind);
+        }
+        QSqlQuery q(db);
+        if (!q.prepare(listSelect(tail)))
+            return out;
+        for (const QVariant &bind : binds)
+            q.addBindValue(bind);
+        if (!q.exec())
+            return out;
+        while (q.next())
+            out.append(trackFromRow(q));
+    }
+    return out;
 }
 
 QList<Track> Library::queryTracks(const QString &sql, const QVariantList &binds) const
@@ -425,6 +535,16 @@ QList<Track> Library::tracks(const QString &kind) const
         return queryTracks(listSelect(QStringLiteral(
             "ORDER BY kind, artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE")));
     }
+    if (kind == QLatin1String("audio")) {
+        return queryTracks(listSelect(QStringLiteral(
+            "WHERE (kind='audio' OR IFNULL(shelf,'')='music') "
+            "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE")));
+    }
+    if (kind == QLatin1String("video")) {
+        return queryTracks(listSelect(QStringLiteral(
+            "WHERE kind='video' AND IFNULL(shelf,'')<>'music' "
+            "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE")));
+    }
     return queryTracks(listSelect(QStringLiteral(
         "WHERE kind=? "
         "ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_no, track_no, title COLLATE NOCASE")),
@@ -439,7 +559,7 @@ QList<Album> Library::albums(int limit) const
         "SELECT COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown artist'),"
         " COALESCE(NULLIF(album,''), 'Unknown album'),"
         " MAX(year), COUNT(*), SUM(duration_ms), MAX(NULLIF(artwork,'')) "
-        "FROM tracks WHERE kind='audio' "
+        "FROM tracks WHERE (kind='audio' OR IFNULL(shelf,'')='music') "
         "GROUP BY 1, 2 "
         "ORDER BY 1 COLLATE NOCASE, 3, 2 COLLATE NOCASE");
     if (limit > 0)
@@ -465,7 +585,7 @@ QList<ArtistRow> Library::artists() const
     q.exec(QStringLiteral(
         "SELECT COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown artist'),"
         " COUNT(DISTINCT COALESCE(NULLIF(album,''), 'Unknown album')), COUNT(*) "
-        "FROM tracks WHERE kind='audio' GROUP BY 1 ORDER BY 1 COLLATE NOCASE"));
+        "FROM tracks WHERE (kind='audio' OR IFNULL(shelf,'')='music') GROUP BY 1 ORDER BY 1 COLLATE NOCASE"));
     while (q.next()) {
         ArtistRow a;
         a.name = q.value(0).toString();
@@ -482,7 +602,7 @@ QList<GenreRow> Library::genres() const
     QSqlQuery q(db_);
     q.exec(QStringLiteral(
         "SELECT COALESCE(NULLIF(genre,''), 'Unknown'), COUNT(*) "
-        "FROM tracks WHERE kind='audio' GROUP BY 1 ORDER BY 1 COLLATE NOCASE"));
+        "FROM tracks WHERE (kind='audio' OR IFNULL(shelf,'')='music') GROUP BY 1 ORDER BY 1 COLLATE NOCASE"));
     while (q.next()) {
         GenreRow g;
         g.name = q.value(0).toString();
@@ -495,7 +615,7 @@ QList<GenreRow> Library::genres() const
 QList<Track> Library::albumTracks(const QString &albumArtist, const QString &album) const
 {
     return queryTracks(listSelect(QStringLiteral(
-        "WHERE kind='audio' "
+        "WHERE (kind='audio' OR IFNULL(shelf,'')='music') "
         "AND COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown artist')=? "
         "AND COALESCE(NULLIF(album,''), 'Unknown album')=? "
         "ORDER BY disc_no, track_no, title COLLATE NOCASE")),
@@ -505,7 +625,7 @@ QList<Track> Library::albumTracks(const QString &albumArtist, const QString &alb
 QList<Track> Library::artistTracks(const QString &artist) const
 {
     return queryTracks(listSelect(QStringLiteral(
-        "WHERE kind='audio' AND ("
+        "WHERE (kind='audio' OR IFNULL(shelf,'')='music') AND ("
         " COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown artist')=? "
         " OR artist=?) "
         "ORDER BY album COLLATE NOCASE, disc_no, track_no")),
@@ -516,11 +636,11 @@ QList<Track> Library::genreTracks(const QString &genre) const
 {
     if (genre == QLatin1String("Unknown")) {
         return queryTracks(listSelect(QStringLiteral(
-            "WHERE kind='audio' AND (genre IS NULL OR genre='') "
+            "WHERE (kind='audio' OR IFNULL(shelf,'')='music') AND (genre IS NULL OR genre='') "
             "ORDER BY artist, album, disc_no, track_no")));
     }
     return queryTracks(listSelect(QStringLiteral(
-        "WHERE kind='audio' AND genre=? "
+        "WHERE (kind='audio' OR IFNULL(shelf,'')='music') AND genre=? "
         "ORDER BY artist, album, disc_no, track_no")),
         {genre});
 }
@@ -571,7 +691,7 @@ QList<Track> Library::mostPlayed(int limit) const
 QList<Track> Library::continueWatching(int limit) const
 {
     return queryTracks(listSelect(QStringLiteral(
-        "WHERE kind='video' AND position_ms>10000 "
+        "WHERE kind='video' AND IFNULL(shelf,'')<>'music' AND position_ms>10000 "
         "AND (duration_ms=0 OR position_ms < duration_ms-15000) "
         "ORDER BY last_played DESC LIMIT ?")),
         {limit});
@@ -582,8 +702,8 @@ QList<Track> Library::needsMetadata(int limit) const
     return queryTracks(QStringLiteral(
         "SELECT * FROM tracks WHERE meta_tried=0 AND ("
         " artwork IS NULL OR artwork='' OR "
-        " (kind='audio' AND (lyrics IS NULL OR lyrics='')) OR "
-        " (kind='video' AND (overview IS NULL OR overview=''))) "
+        " ((kind='audio' OR IFNULL(shelf,'')='music') AND (lyrics IS NULL OR lyrics='')) OR "
+        " (kind='video' AND IFNULL(shelf,'')<>'music' AND (overview IS NULL OR overview=''))) "
         "ORDER BY date_added DESC LIMIT ?"),
         {limit});
 }
@@ -648,7 +768,8 @@ void Library::setAlbumArtwork(const QString &albumArtist, const QString &album, 
 {
     QSqlQuery q(db_);
     q.prepare(QStringLiteral(
-        "UPDATE tracks SET artwork=? WHERE (artwork IS NULL OR artwork='') AND kind='audio' "
+        "UPDATE tracks SET artwork=? WHERE (artwork IS NULL OR artwork='') "
+        "AND (kind='audio' OR IFNULL(shelf,'')='music') "
         "AND COALESCE(NULLIF(album_artist,''), NULLIF(artist,''), 'Unknown artist')=? "
         "AND COALESCE(NULLIF(album,''), 'Unknown album')=?"));
     q.addBindValue(artwork);
@@ -795,8 +916,8 @@ void Library::resetMissingMetadata()
     QSqlQuery q(db_);
     q.exec(QStringLiteral(
         "UPDATE tracks SET meta_tried=0 WHERE artwork IS NULL OR artwork='' "
-        "OR (kind='audio' AND (lyrics IS NULL OR lyrics='')) "
-        "OR (kind='video' AND (overview IS NULL OR overview=''))"));
+        "OR ((kind='audio' OR IFNULL(shelf,'')='music') AND (lyrics IS NULL OR lyrics='')) "
+        "OR (kind='video' AND IFNULL(shelf,'')<>'music' AND (overview IS NULL OR overview=''))"));
 }
 
 qint64 Library::createPlaylist(const QString &name)
@@ -852,6 +973,7 @@ QList<Track> Library::playlistTracks(qint64 id) const
         "tracks.favorite, tracks.rating, tracks.play_count, tracks.last_played, tracks.position_ms, "
         "tracks.width, tracks.height, tracks.date_added, tracks.meta_tried, tracks.content, "
         "tracks.show_name, tracks.season, tracks.episode, tracks.id_lookup, tracks.id_lookup_at, "
+        "tracks.shelf, "
         "playlist_items.id AS item_id FROM playlist_items "
         "JOIN tracks ON tracks.id = playlist_items.track_id "
         "WHERE playlist_items.playlist_id=? ORDER BY playlist_items.position, playlist_items.id"));
@@ -891,18 +1013,149 @@ void Library::removePlaylistItems(const QList<qint64> &itemIds)
     touch();
 }
 
+void Library::refresh()
+{
+    touch();
+}
+
 LibraryStats Library::stats() const
 {
     LibraryStats s;
     QSqlQuery q(db_);
     q.exec(QStringLiteral(
-        "SELECT kind, COUNT(*), COALESCE(SUM(duration_ms),0) FROM tracks GROUP BY kind"));
-    while (q.next()) {
-        if (q.value(0).toString() == QLatin1String("audio"))
-            s.audio = q.value(1).toInt();
-        else if (q.value(0).toString() == QLatin1String("video"))
-            s.video = q.value(1).toInt();
-        s.durationMs += q.value(2).toLongLong();
+        "SELECT "
+        "SUM(CASE WHEN kind='audio' OR IFNULL(shelf,'')='music' THEN 1 ELSE 0 END), "
+        "SUM(CASE WHEN kind='video' AND IFNULL(shelf,'')<>'music' THEN 1 ELSE 0 END), "
+        "COALESCE(SUM(duration_ms),0) FROM tracks"));
+    if (q.next()) {
+        s.audio = q.value(0).toInt();
+        s.video = q.value(1).toInt();
+        s.durationMs = q.value(2).toLongLong();
     }
     return s;
+}
+
+QString Library::applyClassification()
+{
+    QHash<qint64, QPair<QString, QString>> folders;
+    QSqlQuery folderQuery(db_);
+    if (folderQuery.exec(QStringLiteral("SELECT id, path, IFNULL(role, '') FROM folders"))) {
+        while (folderQuery.next())
+            folders.insert(folderQuery.value(0).toLongLong(),
+                           {folderQuery.value(1).toString(), folderQuery.value(2).toString()});
+    }
+
+    struct Row {
+        qint64 id = 0;
+        Track before;
+        Track after;
+    };
+    QList<Row> rows;
+    QSqlQuery q(db_);
+    if (!q.exec(QStringLiteral(
+            "SELECT id, folder_id, path, kind, title, artist, album, album_artist, "
+            "show_name, season, episode, IFNULL(shelf, '') FROM tracks"))) {
+        return QStringLiteral("Could not read the library");
+    }
+    while (q.next()) {
+        Row row;
+        row.id = q.value(0).toLongLong();
+        row.before.folderId = q.value(1).toLongLong();
+        row.before.path = q.value(2).toString();
+        row.before.kind = q.value(3).toString();
+        row.before.title = q.value(4).toString();
+        row.before.artist = q.value(5).toString();
+        row.before.album = q.value(6).toString();
+        row.before.albumArtist = q.value(7).toString();
+        row.before.showName = q.value(8).toString();
+        row.before.season = q.value(9).toInt();
+        row.before.episode = q.value(10).toInt();
+        row.before.shelf = q.value(11).toString();
+        row.after = row.before;
+        const auto hint = folders.value(row.before.folderId);
+        applyLibraryPlacement(row.after, hint.second, hint.first);
+        rows.append(row);
+    }
+
+    if (!db_.transaction())
+        return QStringLiteral("Could not update the library");
+    QSqlQuery up(db_);
+    up.prepare(QStringLiteral(
+        "UPDATE tracks SET shelf=?, show_name=?, season=?, episode=?, artist=?, album=?, "
+        "album_artist=?, title=? WHERE id=?"));
+    int changed = 0;
+    int musicVideos = 0;
+    for (const Row &row : rows) {
+        if (row.after.shelf == QLatin1String("music"))
+            ++musicVideos;
+        const bool same = row.after.shelf == row.before.shelf
+            && row.after.showName == row.before.showName
+            && row.after.season == row.before.season
+            && row.after.episode == row.before.episode
+            && row.after.artist == row.before.artist
+            && row.after.album == row.before.album
+            && row.after.albumArtist == row.before.albumArtist
+            && row.after.title == row.before.title;
+        if (same)
+            continue;
+        up.bindValue(0, row.after.shelf);
+        up.bindValue(1, row.after.showName);
+        up.bindValue(2, row.after.season);
+        up.bindValue(3, row.after.episode);
+        up.bindValue(4, row.after.artist);
+        up.bindValue(5, row.after.album);
+        up.bindValue(6, row.after.albumArtist);
+        up.bindValue(7, row.after.title);
+        up.bindValue(8, row.id);
+        if (!up.exec()) {
+            db_.rollback();
+            return QStringLiteral("Could not update the library");
+        }
+        ++changed;
+    }
+
+    QHash<QString, QHash<QString, int>> votes;
+    for (const Row &row : rows) {
+        if (row.after.shelf == QLatin1String("music"))
+            continue;
+        const QString show = row.after.showName.trimmed();
+        if (!show.isEmpty())
+            votes[showGroupKey(show)][show] += 1;
+    }
+    QSqlQuery rename(db_);
+    rename.prepare(QStringLiteral("UPDATE tracks SET show_name=? WHERE show_name=?"));
+    int renamed = 0;
+    for (auto it = votes.cbegin(); it != votes.cend(); ++it) {
+        const QString best = preferredSpelling(it.value());
+        for (auto spell = it.value().cbegin(); spell != it.value().cend(); ++spell) {
+            if (spell.key() == best || best.isEmpty())
+                continue;
+            rename.bindValue(0, best);
+            rename.bindValue(1, spell.key());
+            if (!rename.exec()) {
+                db_.rollback();
+                return QStringLiteral("Could not match show names");
+            }
+            renamed += spell.value();
+        }
+    }
+    if (!db_.commit())
+        return QStringLiteral("Could not save the library");
+
+    QSqlQuery meta(db_);
+    meta.prepare(QStringLiteral("INSERT INTO meta(key, value) VALUES('classify_version', '1') "
+                                "ON CONFLICT(key) DO UPDATE SET value='1'"));
+    meta.exec();
+    refreshNote_ = QStringLiteral("%1 files updated. %2 music videos are listed with songs. "
+                                  "%3 show names took the usual capitalization.")
+                       .arg(changed)
+                       .arg(musicVideos)
+                       .arg(renamed);
+    touch();
+    return refreshNote_;
+}
+
+QString Library::reclassify()
+{
+    return applyClassification();
 }
