@@ -94,6 +94,8 @@ private:
     void reloadViews();
     void schedulePageLoad(int page);
     void showScan(int percent, const QString &detail);
+    void showActivity(const QString &owner, int percent, const QString &detail);
+    void clearActivity(const QString &owner);
     void buildMenus();
     void runSearch();
     Track trackForPath(const QString &path) const;
@@ -161,6 +163,7 @@ private:
     QPoint lastCursor_;
     bool mini_ = false;
     bool scanning_ = false;
+    QString activityOwner_;
     bool restoring_ = false;
     bool countedPlay_ = false;
     qint64 playId_ = 0;

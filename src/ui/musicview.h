@@ -8,9 +8,10 @@
 class QTimer;
 
 class Library;
-class QListWidget;
+class QComboBox;
 class QStackedWidget;
 class QTableView;
+class QTableWidget;
 class TrackModel;
 class TrackProxy;
 class AlbumModel;
@@ -50,16 +51,16 @@ private:
     bool audioReady_ = false;
     QList<Track> audioCache_;
     class QListView *albumGrid_ = nullptr;
-    class QListWidget *genreBrowser_ = nullptr;
-    class QListWidget *artistBrowser_ = nullptr;
-    class QListWidget *albumBrowser_ = nullptr;
-    class QComboBox *labelFilter_ = nullptr;
+    QComboBox *genreFilter_ = nullptr;
+    QComboBox *artistFilter_ = nullptr;
+    QComboBox *albumFilter_ = nullptr;
+    QComboBox *labelFilter_ = nullptr;
 
     Library *library_ = nullptr;
     QStackedWidget *stack_ = nullptr;
     AlbumModel *albums_ = nullptr;
-    QListWidget *artists_ = nullptr;
-    QListWidget *genres_ = nullptr;
+    QTableWidget *artists_ = nullptr;
+    QTableWidget *genres_ = nullptr;
     TrackModel *tracks_ = nullptr;
     TrackProxy *proxy_ = nullptr;
     QTableView *table_ = nullptr;

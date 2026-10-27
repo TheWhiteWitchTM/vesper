@@ -10,12 +10,13 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListView>
-#include <QListWidget>
 #include <QPushButton>
 #include <QSet>
 #include <QScrollBar>
+#include <QSizePolicy>
 #include <QStackedWidget>
 #include <QTableView>
+#include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -44,6 +45,55 @@ void prepare(QTableView *table)
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     table->sortByColumn(2, Qt::AscendingOrder);
 }
+
+void prepareCount(QTableWidget *table, const QStringList &headers)
+{
+    table->setColumnCount(headers.size());
+    table->setHorizontalHeaderLabels(headers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setAlternatingRowColors(true);
+    table->setShowGrid(false);
+    table->setSortingEnabled(false);
+    table->verticalHeader()->hide();
+    table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    table->verticalHeader()->setDefaultSectionSize(36);
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setHighlightSections(false);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int column = 1; column < headers.size(); ++column) {
+        table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Fixed);
+        table->setColumnWidth(column, 110);
+    }
+}
+
+void setCountCell(QTableWidget *table, int row, int column, int value)
+{
+    auto *item = new QTableWidgetItem;
+    item->setData(Qt::DisplayRole, value);
+    item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+    table->setItem(row, column, item);
+}
+
+void fillCombo(QComboBox *box, const QStringList &names, const QString &pick, const QString &allLabel)
+{
+    box->blockSignals(true);
+    box->clear();
+    box->addItem(allLabel, QString());
+    for (const QString &name : names)
+        box->addItem(name, name);
+    int selected = 0;
+    for (int i = 0; i < box->count(); ++i) {
+        if (box->itemData(i).toString() == pick) {
+            selected = i;
+            break;
+        }
+    }
+    box->setCurrentIndex(selected);
+    box->blockSignals(false);
+}
 }
 
 MusicView::MusicView(Library *library, QWidget *parent)
@@ -67,7 +117,7 @@ MusicView::MusicView(Library *library, QWidget *parent)
     modes->addWidget(genresButton);
     modes->addStretch();
     modes->addWidget(shuffle);
-    auto *hint = new QLabel(QStringLiteral("Albums open on a click. Songs filters by genre, artist, and album."));
+    auto *hint = new QLabel(QStringLiteral("Albums open on a click. Songs, artists, and genres are tables."));
     hint->setObjectName(QStringLiteral("hint"));
 
     stack_ = new QStackedWidget;
@@ -88,8 +138,10 @@ MusicView::MusicView(Library *library, QWidget *parent)
     albumGrid_->setSelectionMode(QAbstractItemView::SingleSelection);
     albumGrid_->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    artists_ = new QListWidget;
-    genres_ = new QListWidget;
+    artists_ = new QTableWidget;
+    genres_ = new QTableWidget;
+    prepareCount(artists_, {QStringLiteral("Artist"), QStringLiteral("Albums"), QStringLiteral("Songs")});
+    prepareCount(genres_, {QStringLiteral("Genre"), QStringLiteral("Songs")});
     tracks_ = new TrackModel(this);
     proxy_ = new TrackProxy(this);
     proxy_->setSourceModel(tracks_);
@@ -97,56 +149,40 @@ MusicView::MusicView(Library *library, QWidget *parent)
     table_->setModel(proxy_);
     prepare(table_);
 
-    genreBrowser_ = new QListWidget;
-    artistBrowser_ = new QListWidget;
-    albumBrowser_ = new QListWidget;
+    auto tuneFilter = [](QComboBox *box) {
+        box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        box->setMinimumContentsLength(14);
+        box->setMaxVisibleItems(16);
+        box->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    };
+    genreFilter_ = new QComboBox;
+    artistFilter_ = new QComboBox;
+    albumFilter_ = new QComboBox;
     labelFilter_ = new QComboBox;
+    for (QComboBox *box : {genreFilter_, artistFilter_, albumFilter_, labelFilter_})
+        tuneFilter(box);
     labelFilter_->addItem(QStringLiteral("All labels"), QString());
     labelFilter_->addItem(QStringLiteral("G"), QStringLiteral("G"));
     labelFilter_->addItem(QStringLiteral("PG"), QStringLiteral("PG"));
     labelFilter_->addItem(QStringLiteral("R"), QStringLiteral("R"));
     labelFilter_->addItem(QStringLiteral("Not labeled"), QStringLiteral("-"));
-    auto easeList = [](QListWidget *list) {
-        list->setUniformItemSizes(true);
-        list->setLayoutMode(QListView::Batched);
-        list->setBatchSize(48);
-    };
-    easeList(artists_);
-    easeList(genres_);
-    easeList(genreBrowser_);
-    easeList(artistBrowser_);
-    easeList(albumBrowser_);
     auto *songs = new QWidget;
     auto *songsLayout = new QVBoxLayout(songs);
     songsLayout->setContentsMargins(0, 0, 0, 0);
-    songsLayout->setSpacing(6);
-    auto *browserRow = new QHBoxLayout;
-    browserRow->setSpacing(8);
-    auto addBrowser = [&](const QString &title, QListWidget *list) {
-        auto *column = new QVBoxLayout;
-        column->setSpacing(2);
+    songsLayout->setSpacing(8);
+    auto *filters = new QHBoxLayout;
+    filters->setSpacing(8);
+    auto addFilter = [&](const QString &title, QComboBox *box, int stretch) {
         auto *caption = new QLabel(title);
         caption->setObjectName(QStringLiteral("hint"));
-        list->setFixedHeight(168);
-        list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        column->addWidget(caption);
-        column->addWidget(list);
-        browserRow->addLayout(column, 1);
+        filters->addWidget(caption);
+        filters->addWidget(box, stretch);
     };
-    addBrowser(QStringLiteral("Genre"), genreBrowser_);
-    addBrowser(QStringLiteral("Artist"), artistBrowser_);
-    addBrowser(QStringLiteral("Album"), albumBrowser_);
-    auto *labelRow = new QHBoxLayout;
-    labelRow->addLayout(browserRow, 1);
-    auto *labelColumn = new QVBoxLayout;
-    labelColumn->setSpacing(2);
-    auto *labelCaption = new QLabel(QStringLiteral("Label"));
-    labelCaption->setObjectName(QStringLiteral("hint"));
-    labelColumn->addWidget(labelCaption);
-    labelColumn->addWidget(labelFilter_);
-    labelColumn->addStretch();
-    labelRow->addLayout(labelColumn);
-    songsLayout->addLayout(labelRow);
+    addFilter(QStringLiteral("Genre"), genreFilter_, 2);
+    addFilter(QStringLiteral("Artist"), artistFilter_, 2);
+    addFilter(QStringLiteral("Album"), albumFilter_, 2);
+    addFilter(QStringLiteral("Label"), labelFilter_, 1);
+    songsLayout->addLayout(filters);
     songsLayout->addWidget(table_, 1);
 
     auto *detail = new QWidget;
@@ -224,9 +260,9 @@ MusicView::MusicView(Library *library, QWidget *parent)
         stack_->setCurrentIndex(0);
         ensureSection(0);
     });
-    auto pickBrowser = [this](QListWidget *list, QString *pick) {
-        connect(list, &QListWidget::currentItemChanged, this, [this, pick](QListWidgetItem *current, QListWidgetItem *) {
-            *pick = current ? current->data(Qt::UserRole).toString() : QString();
+    auto pickFilter = [this](QComboBox *box, QString *pick) {
+        connect(box, &QComboBox::currentIndexChanged, this, [this, box, pick](int) {
+            *pick = box->currentData().toString();
             if (pick == &genrePick_) {
                 artistPick_.clear();
                 albumPick_.clear();
@@ -236,9 +272,9 @@ MusicView::MusicView(Library *library, QWidget *parent)
             rebuildBrowser();
         });
     };
-    pickBrowser(genreBrowser_, &genrePick_);
-    pickBrowser(artistBrowser_, &artistPick_);
-    pickBrowser(albumBrowser_, &albumPick_);
+    pickFilter(genreFilter_, &genrePick_);
+    pickFilter(artistFilter_, &artistPick_);
+    pickFilter(albumFilter_, &albumPick_);
     connect(labelFilter_, &QComboBox::currentIndexChanged, this, [this](int) {
         labelPick_ = labelFilter_->currentData().toString();
         rebuildBrowser();
@@ -280,11 +316,19 @@ MusicView::MusicView(Library *library, QWidget *parent)
             albumGrid_->viewport()->update();
     });
 
-    connect(artists_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
-        showTracks(library_->artistTracks(item->data(Qt::UserRole).toString()), item->text(), false);
+    connect(artists_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        QTableWidgetItem *item = artists_->item(row, 0);
+        if (!item)
+            return;
+        const QString name = item->data(Qt::UserRole).toString();
+        showTracks(library_->artistTracks(name), item->text(), false);
     });
-    connect(genres_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
-        showTracks(library_->genreTracks(item->data(Qt::UserRole).toString()), item->text(), false);
+    connect(genres_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        QTableWidgetItem *item = genres_->item(row, 0);
+        if (!item)
+            return;
+        const QString name = item->data(Qt::UserRole).toString();
+        showTracks(library_->genreTracks(name), item->text(), false);
     });
     wireTable(table_);
     wireTable(detailTable_);
@@ -352,31 +396,41 @@ void MusicView::ensureSection(int page)
         albumGrid_->verticalScrollBar()->setValue(albumScroll);
         albumsReady_ = true;
     } else if (page == 1 && !artistsReady_) {
+        const QList<ArtistRow> rows = library_->artists();
+        artists_->setSortingEnabled(false);
         artists_->setUpdatesEnabled(false);
-        artists_->clear();
-        for (const ArtistRow &artist : library_->artists()) {
-            auto *item = new QListWidgetItem(QStringLiteral("%1    ·    %2 albums · %3 tracks")
-                                                 .arg(artist.name)
-                                                 .arg(artist.albums)
-                                                 .arg(artist.tracks));
-            item->setData(Qt::UserRole, artist.name);
-            item->setSizeHint(QSize(0, 36));
-            artists_->addItem(item);
+        artists_->setRowCount(rows.size());
+        for (int i = 0; i < rows.size(); ++i) {
+            const ArtistRow &artist = rows.at(i);
+            auto *name = new QTableWidgetItem(artist.name);
+            name->setData(Qt::UserRole, artist.name);
+            name->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            artists_->setItem(i, 0, name);
+            setCountCell(artists_, i, 1, artist.albums);
+            setCountCell(artists_, i, 2, artist.tracks);
         }
         artists_->setUpdatesEnabled(true);
+        artists_->setSortingEnabled(true);
+        artists_->sortByColumn(0, Qt::AscendingOrder);
         artistsReady_ = true;
     } else if (page == 2 && !songsReady_) {
         rebuildBrowser();
     } else if (page == 3 && !genresReady_) {
+        const QList<GenreRow> rows = library_->genres();
+        genres_->setSortingEnabled(false);
         genres_->setUpdatesEnabled(false);
-        genres_->clear();
-        for (const GenreRow &genre : library_->genres()) {
-            auto *item = new QListWidgetItem(QStringLiteral("%1    ·    %2").arg(genre.name).arg(genre.tracks));
-            item->setData(Qt::UserRole, genre.name);
-            item->setSizeHint(QSize(0, 36));
-            genres_->addItem(item);
+        genres_->setRowCount(rows.size());
+        for (int i = 0; i < rows.size(); ++i) {
+            const GenreRow &genre = rows.at(i);
+            auto *name = new QTableWidgetItem(genre.name);
+            name->setData(Qt::UserRole, genre.name);
+            name->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            genres_->setItem(i, 0, name);
+            setCountCell(genres_, i, 1, genre.tracks);
         }
         genres_->setUpdatesEnabled(true);
+        genres_->setSortingEnabled(true);
+        genres_->sortByColumn(0, Qt::AscendingOrder);
         genresReady_ = true;
     }
 }
@@ -428,35 +482,6 @@ QString artistOf(const Track &track)
 QString albumOf(const Track &track)
 {
     return track.displayAlbum();
-}
-
-void fillBrowser(QListWidget *list, const QStringList &names, const QString &pick)
-{
-    list->setUpdatesEnabled(false);
-    list->blockSignals(true);
-    const int scroll = list->verticalScrollBar()->value();
-    list->clear();
-    auto *all = new QListWidgetItem(QStringLiteral("All"));
-    all->setData(Qt::UserRole, QString());
-    all->setSizeHint(QSize(0, 28));
-    list->addItem(all);
-    for (const QString &name : names) {
-        auto *item = new QListWidgetItem(name);
-        item->setData(Qt::UserRole, name);
-        item->setSizeHint(QSize(0, 28));
-        list->addItem(item);
-    }
-    int selected = 0;
-    for (int i = 0; i < list->count(); ++i) {
-        if (list->item(i)->data(Qt::UserRole).toString() == pick) {
-            selected = i;
-            break;
-        }
-    }
-    list->setCurrentRow(selected);
-    list->verticalScrollBar()->setValue(scroll);
-    list->blockSignals(false);
-    list->setUpdatesEnabled(true);
 }
 
 } // namespace
@@ -525,9 +550,9 @@ void MusicView::rebuildBrowser()
         names.sort(Qt::CaseInsensitive);
         return names;
     };
-    fillBrowser(genreBrowser_, namesOf(genres), genrePick_);
-    fillBrowser(artistBrowser_, namesOf(artists), artistPick_);
-    fillBrowser(albumBrowser_, namesOf(albums), albumPick_);
+    fillCombo(genreFilter_, namesOf(genres), genrePick_, QStringLiteral("All genres"));
+    fillCombo(artistFilter_, namesOf(artists), artistPick_, QStringLiteral("All artists"));
+    fillCombo(albumFilter_, namesOf(albums), albumPick_, QStringLiteral("All albums"));
 
     const int scroll = table_->verticalScrollBar()->value();
     const int sortColumn = table_->horizontalHeader()->sortIndicatorSection();

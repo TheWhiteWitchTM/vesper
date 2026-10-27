@@ -39,11 +39,13 @@
 #include <QDialogButtonBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
 #include <QFontMetrics>
 #include <QFormLayout>
+#include <QHideEvent>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -64,6 +66,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QScrollArea>
 #include <QShortcut>
 #include <QSizePolicy>
@@ -81,13 +84,30 @@ public:
     explicit ScanRing(QWidget *parent = nullptr)
         : QWidget(parent)
     {
-        setFixedSize(22, 22);
+        setFixedSize(28, 28);
+        setMouseTracking(true);
+        setCursor(Qt::ArrowCursor);
     }
 
     void setPercent(int percent)
     {
         percent_ = percent;
         update();
+    }
+
+    void setDetail(const QString &detail)
+    {
+        detail_ = detail;
+        if (underMouse())
+            showCard();
+        else
+            hideDetail();
+    }
+
+    void hideDetail()
+    {
+        if (card_)
+            card_->hide();
     }
 
     void advance()
@@ -103,8 +123,8 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        const QRectF ring = QRectF(rect()).adjusted(2.5, 2.5, -2.5, -2.5);
-        QPen pen(QColor(QStringLiteral("#3a322a")), 2.6, Qt::SolidLine, Qt::RoundCap);
+        const QRectF ring = QRectF(rect()).adjusted(5, 5, -5, -5);
+        QPen pen(QColor(QStringLiteral("#7a6854")), 2.2, Qt::SolidLine, Qt::RoundCap);
         painter.setPen(pen);
         painter.setBrush(Qt::NoBrush);
         painter.drawEllipse(ring);
@@ -116,13 +136,64 @@ protected:
         }
         if (percent_ <= 0)
             return;
-        const int span = qBound(1, percent_, 100) * 360 * 16 / 100;
+        const int span = qBound(8, percent_, 100) * 360 * 16 / 100;
         painter.drawArc(ring, 90 * 16, -span);
     }
 
+    void enterEvent(QEnterEvent *event) override
+    {
+        QWidget::enterEvent(event);
+        showCard();
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        hideDetail();
+        QWidget::leaveEvent(event);
+    }
+
+    void hideEvent(QHideEvent *event) override
+    {
+        hideDetail();
+        QWidget::hideEvent(event);
+    }
+
 private:
+    void showCard()
+    {
+        if (detail_.trimmed().isEmpty())
+            return;
+        if (!card_) {
+            card_ = new QLabel(this, Qt::ToolTip);
+            card_->setObjectName(QStringLiteral("scanDetail"));
+            card_->setWordWrap(true);
+            card_->setAttribute(Qt::WA_TransparentForMouseEvents);
+            card_->setStyleSheet(QStringLiteral(
+                "QLabel { background: #2a241e; color: #f3eee6; border: 1px solid #4a4036;"
+                " border-radius: 8px; padding: 8px 10px; font-size: 10.5pt; }"));
+        }
+        card_->setFixedWidth(420);
+        card_->setText(detail_);
+        card_->adjustSize();
+        QPoint pos = mapToGlobal(QPoint(width() - card_->width(), height() + 6));
+        if (QScreen *screen = this->screen()) {
+            const QRect avail = screen->availableGeometry();
+            if (pos.x() < avail.left() + 8)
+                pos.setX(avail.left() + 8);
+            if (pos.x() + card_->width() > avail.right() - 8)
+                pos.setX(qMax(avail.left() + 8, avail.right() - card_->width() - 8));
+            if (pos.y() + card_->height() > avail.bottom() - 8)
+                pos.setY(qMax(avail.top() + 8, mapToGlobal(QPoint(0, 0)).y() - card_->height() - 6));
+        }
+        card_->move(pos);
+        card_->show();
+        card_->raise();
+    }
+
     int percent_ = 0;
     int angle_ = 90;
+    QString detail_;
+    QLabel *card_ = nullptr;
 };
 #include <QUrl>
 #include <QVBoxLayout>
@@ -177,8 +248,16 @@ MainWindow::MainWindow(const QStringList &paths, QWidget *parent)
     transport_->setKidsMode(settings_->kidsMode());
     namer_ = new IdNamer(library_, player_, settings_, this);
     connect(namer_, &IdNamer::statusChanged, this, [this](const QString &text) {
-        if (!text.isEmpty())
-            setStatus(text, true);
+        const bool busy = text.startsWith(QLatin1String("Checking "))
+            || text.startsWith(QLatin1String("Asking "))
+            || text.startsWith(QLatin1String("Still asking"));
+        if (text.isEmpty() || !busy) {
+            clearActivity(QStringLiteral("name"));
+            if (!text.isEmpty())
+                setStatus(text);
+            return;
+        }
+        showActivity(QStringLiteral("name"), -1, text);
     });
     connect(namer_, &IdNamer::noteChanged, settingsView_, &SettingsView::reload);
     if (settings_->fetchOnline())
@@ -293,7 +372,6 @@ void MainWindow::buildUi()
     addNav(QStringLiteral("Videos"), Icons::video(), 2);
     addNav(QStringLiteral("Playlists"), Icons::playlist(), 3);
     addNav(QStringLiteral("Queue"), Icons::queue(), 4);
-    addNav(QStringLiteral("Now playing"), Icons::spark(), 5);
     navLayout->addStretch();
 
     auto *scroll = new QScrollArea;
@@ -860,17 +938,26 @@ void MainWindow::wire()
     });
     connect(library_, &Library::trackUpdated, this, [this](const Track &track) {
         music_->updateTrack(track);
+        if (videos_)
+            videos_->updateTrack(track);
         searchModel_->updateTrack(track);
         if (track.id > 0 && track.id == player_->current().id)
             transport_->setFavorite(track.favorite);
     });
     connect(library_, &Library::foldersChanged, settingsView_, &SettingsView::reload);
     connect(metadata_, &MetadataService::statusChanged, this, [this](const QString &text) {
-        if (scanning_)
+        if (text.isEmpty()) {
+            clearActivity(QStringLiteral("meta"));
+            if (!scanning_)
+                showIdleStatus();
             return;
-        if (text.isEmpty())
-            showIdleStatus();
-        else
+        }
+        if (text.startsWith(QLatin1String("Looking up"))) {
+            showActivity(QStringLiteral("meta"), -1, text);
+            return;
+        }
+        clearActivity(QStringLiteral("meta"));
+        if (!scanning_)
             setStatus(text, true);
     });
 
@@ -882,15 +969,12 @@ void MainWindow::wire()
         setStatus(text);
     }, Qt::QueuedConnection);
     connect(scanner_, &Scanner::progress, this, [this](int percent, const QString &detail) {
-        showScan(percent, detail);
+        showActivity(QStringLiteral("scan"), percent, detail);
     }, Qt::QueuedConnection);
     connect(scanner_, qOverload<bool>(&Scanner::finished), this, [this](bool cancelled) {
         scanning_ = false;
         cancelScan_->hide();
-        if (scanSpin_)
-            scanSpin_->stop();
-        if (scanRing_)
-            scanRing_->hide();
+        clearActivity(QStringLiteral("scan"));
         if (viewReloadTimer_)
             viewReloadTimer_->stop();
         viewsDirty_ = 0xf;
@@ -1046,7 +1130,8 @@ void MainWindow::startScan(const QList<QPair<qint64, QString>> &rootsIn)
     cancelScan_->show();
     if (viewReloadTimer_)
         viewReloadTimer_->stop();
-    showScan(-1, QStringLiteral("Counting files"));
+    showIdleStatus();
+    showActivity(QStringLiteral("scan"), -1, QStringLiteral("Counting files"));
 }
 
 void MainWindow::considerResume(const Track &track)
@@ -2049,7 +2134,7 @@ void MainWindow::showScan(int percent, const QString &detail)
     if (!scanRing_)
         return;
     scanRing_->setPercent(percent);
-    scanRing_->setToolTip(detail.isEmpty() ? QStringLiteral("Scanning") : detail);
+    scanRing_->setDetail(detail.isEmpty() ? QStringLiteral("Scanning") : detail);
     scanRing_->show();
     if (busyBar_)
         busyBar_->hide();
@@ -2061,6 +2146,27 @@ void MainWindow::showScan(int percent, const QString &detail)
     } else {
         scanSpin_->stop();
     }
+}
+
+void MainWindow::showActivity(const QString &owner, int percent, const QString &detail)
+{
+    if (scanning_ && owner != QLatin1String("scan"))
+        return;
+    activityOwner_ = owner;
+    showScan(percent, detail);
+}
+
+void MainWindow::clearActivity(const QString &owner)
+{
+    if (activityOwner_ != owner)
+        return;
+    activityOwner_.clear();
+    if (scanSpin_)
+        scanSpin_->stop();
+    if (!scanRing_)
+        return;
+    scanRing_->hideDetail();
+    scanRing_->hide();
 }
 
 void MainWindow::reloadViews()

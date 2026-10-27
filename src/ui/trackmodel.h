@@ -24,6 +24,7 @@ public:
     explicit TrackModel(QObject *parent = nullptr);
     void setTracks(const QList<Track> &tracks);
     void setNowPlaying(qint64 id);
+    void setVideoLayout(bool on);
     void updateTrack(const Track &track);
     QList<Track> tracks() const { return rows_; }
     Track trackAt(int row) const;
@@ -36,6 +37,7 @@ public:
 private:
     QList<Track> rows_;
     qint64 nowId_ = 0;
+    bool videoLayout_ = false;
 };
 
 class TrackProxy : public QSortFilterProxyModel {
@@ -59,15 +61,4 @@ private:
     QList<Album> albums_;
 };
 
-class VideoModel : public QAbstractListModel {
-    Q_OBJECT
-public:
-    explicit VideoModel(QObject *parent = nullptr);
-    void setVideos(const QList<Track> &tracks);
-    QList<Track> tracks() const { return tracks_; }
-    int rowCount(const QModelIndex &parent = {}) const override;
-    QVariant data(const QModelIndex &index, int role) const override;
 
-private:
-    QList<Track> tracks_;
-};

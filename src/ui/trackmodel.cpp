@@ -2,6 +2,26 @@
 
 #include <QColor>
 
+namespace {
+
+QString episodeMark(const Track &track)
+{
+    if (track.episode <= 0 && track.season <= 0)
+        return {};
+    return QStringLiteral("S%1E%2")
+        .arg(qMax(0, track.season), 2, 10, QChar('0'))
+        .arg(qMax(0, track.episode), 2, 10, QChar('0'));
+}
+
+QString showLabel(const Track &track)
+{
+    if (!track.showName.trimmed().isEmpty())
+        return track.showName.trimmed();
+    return track.displayArtist();
+}
+
+} // namespace
+
 TrackModel::TrackModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
@@ -22,6 +42,16 @@ void TrackModel::setNowPlaying(qint64 id)
         if (rows_.at(row).id == previous || rows_.at(row).id == id)
             emit dataChanged(index(row, 0), index(row, 0));
     }
+}
+
+void TrackModel::setVideoLayout(bool on)
+{
+    if (videoLayout_ == on)
+        return;
+    videoLayout_ = on;
+    emit headerDataChanged(Qt::Horizontal, 0, columnCount() - 1);
+    if (!rows_.isEmpty())
+        emit dataChanged(index(0, 0), index(rows_.size() - 1, columnCount() - 1));
 }
 
 void TrackModel::updateTrack(const Track &track)
@@ -77,6 +107,19 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
     }
 
     if (role == Qt::UserRole) {
+        if (videoLayout_) {
+            switch (index.column()) {
+            case 0: return track.id == nowId_ ? 0 : 1;
+            case 1: return track.episode > 0 ? track.season * 10000 + track.episode : track.year;
+            case 2: return track.displayTitle().toLower();
+            case 3: return showLabel(track).toLower();
+            case 4: return track.genre.toLower();
+            case 5: return track.durationMs;
+            case 6: return track.favorite ? 0 : 1;
+            case 7: return track.content;
+            default: break;
+            }
+        }
         switch (index.column()) {
         case 0: return track.id == nowId_ ? 0 : 1;
         case 1: return track.trackNo;
@@ -91,6 +134,25 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
     }
     if (role != Qt::DisplayRole && role != Qt::ToolTipRole)
         return {};
+    if (videoLayout_) {
+        switch (index.column()) {
+        case 0: return (track.id == nowId_ && nowId_ != 0) ? QStringLiteral("▶") : QString();
+        case 1: {
+            const QString mark = episodeMark(track);
+            if (!mark.isEmpty())
+                return mark;
+            return track.year > 0 ? QString::number(track.year) : QString();
+        }
+        case 2: return track.displayTitle();
+        case 3: return showLabel(track);
+        case 4: return track.genre;
+        case 5: return track.durationMs > 0 ? formatTime(track.durationMs) : QStringLiteral("—");
+        case 6: return track.favorite ? QStringLiteral("♥") : QStringLiteral("♡");
+        case 7: return track.content;
+        default: break;
+        }
+        return {};
+    }
     switch (index.column()) {
     case 0: return (track.id == nowId_ && nowId_ != 0) ? QStringLiteral("▶") : QString();
     case 1: return track.trackNo > 0 ? QString::number(track.trackNo) : QString();
@@ -113,8 +175,8 @@ QVariant TrackModel::headerData(int section, Qt::Orientation orientation, int ro
     case 0: return QString();
     case 1: return QStringLiteral("#");
     case 2: return QStringLiteral("Title");
-    case 3: return QStringLiteral("Artist");
-    case 4: return QStringLiteral("Album");
+    case 3: return videoLayout_ ? QStringLiteral("Show") : QStringLiteral("Artist");
+    case 4: return videoLayout_ ? QStringLiteral("Genre") : QStringLiteral("Album");
     case 5: return QStringLiteral("Time");
     case 6: return QString();
     case 7: return QStringLiteral("Label");
@@ -178,55 +240,4 @@ QVariant AlbumModel::data(const QModelIndex &index, int role) const
     return {};
 }
 
-VideoModel::VideoModel(QObject *parent)
-    : QAbstractListModel(parent)
-{
-}
 
-void VideoModel::setVideos(const QList<Track> &tracks)
-{
-    beginResetModel();
-    tracks_ = tracks;
-    endResetModel();
-}
-
-int VideoModel::rowCount(const QModelIndex &parent) const
-{
-    return parent.isValid() ? 0 : tracks_.size();
-}
-
-QVariant VideoModel::data(const QModelIndex &index, int role) const
-{
-    if (!index.isValid() || index.row() >= tracks_.size())
-        return {};
-    const Track &track = tracks_.at(index.row());
-    int progress = -1;
-    if (track.durationMs > 0 && track.positionMs > 10000 && track.positionMs < track.durationMs - 15000)
-        progress = int((track.positionMs * 100) / track.durationMs);
-    switch (role) {
-    case CoverRoles::Title: return track.displayTitle();
-    case CoverRoles::Subtitle: return track.overview.isEmpty() ? track.genre : track.overview.left(90);
-    case CoverRoles::ArtPath: return track.artwork;
-    case CoverRoles::Key: return track.path;
-    case CoverRoles::Badge: {
-        QString badge = track.content;
-        if (track.durationMs > 0) {
-            if (!badge.isEmpty())
-                badge += QStringLiteral(" · ");
-            badge += formatTime(track.durationMs);
-        }
-        if (track.episode > 0) {
-            const QString mark = QStringLiteral("S%1E%2")
-                                     .arg(qMax(0, track.season), 2, 10, QChar('0'))
-                                     .arg(track.episode, 2, 10, QChar('0'));
-            badge = badge.isEmpty() ? mark : mark + QStringLiteral(" · ") + badge;
-        }
-        return badge;
-    }
-    case CoverRoles::Progress: return progress;
-    case CoverRoles::TrackRole: return QVariant::fromValue(track);
-    case Qt::ToolTipRole: return track.displayTitle();
-    default: break;
-    }
-    return {};
-}
