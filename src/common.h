@@ -149,6 +149,11 @@ QString formatTime(qint64 ms);
 bool isAudioExt(const QString &ext);
 bool isVideoExt(const QString &ext);
 bool isMediaFile(const QString &path);
+// Other media in the same folder, in play order. startIndex is the opened file.
+QStringList mediaFilesBeside(const QString &filePath, int *startIndex);
+QString mediaOpenFilter();
+QStringList supportedMimeTypes();
+int mediaBesideSelfCheck();
 QString cleanMediaTitle(const QString &fileBaseName);
 bool nameIsCrypticId(const QString &fileBaseName);
 QString cleanDirPath(const QString &path);

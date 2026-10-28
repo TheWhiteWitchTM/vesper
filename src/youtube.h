@@ -33,6 +33,13 @@ struct YtLink {
     QString name;
 };
 
+// A pasted channel link. id is the UC… id when the URL contains one.
+// name is the @handle or custom name when that is all the URL has.
+struct YtChannelRef {
+    QString id;
+    QString name;
+};
+
 // Turns a YouTube link into a direct stream. Playback then stays inside
 // Vesper: the site player is what inserts ad breaks and pauses when its
 // tab is hidden.
@@ -76,3 +83,7 @@ private:
 QString youtubeVideoId(const QString &text);
 QString youtubeWatchUrl(const QString &videoId);
 bool youtubeNeedsResolve(const Track &track);
+// Reads /channel/UC…, /@name, /c/name, /user/name, and a bare @name.
+// A watch, short, or youtu.be link comes back empty.
+YtChannelRef youtubeChannelRef(const QString &text);
+int youtubeRulesCheck();

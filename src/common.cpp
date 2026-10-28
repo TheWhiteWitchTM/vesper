@@ -8,6 +8,10 @@
 #include <QLibrary>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTemporaryDir>
+
+#include <algorithm>
+#include <cstdio>
 
 QString Track::displayTitle() const
 {
@@ -101,6 +105,212 @@ bool isMediaFile(const QString &path)
     if (isStreamUrl(path))
         return true;
     return isAudioExt(QFileInfo(path).suffix()) || isVideoExt(QFileInfo(path).suffix());
+}
+
+static int naturalNameCompare(const QString &a, const QString &b)
+{
+    int i = 0;
+    int j = 0;
+    while (i < a.size() && j < b.size()) {
+        const QChar ca = a.at(i);
+        const QChar cb = b.at(j);
+        if (ca.isDigit() && cb.isDigit()) {
+            int ia = i;
+            int ib = j;
+            while (ia < a.size() && a.at(ia) == QLatin1Char('0'))
+                ++ia;
+            while (ib < b.size() && b.at(ib) == QLatin1Char('0'))
+                ++ib;
+            int enda = ia;
+            int endb = ib;
+            while (enda < a.size() && a.at(enda).isDigit())
+                ++enda;
+            while (endb < b.size() && b.at(endb).isDigit())
+                ++endb;
+            const int lena = enda - ia;
+            const int lenb = endb - ib;
+            if (lena != lenb)
+                return lena < lenb ? -1 : 1;
+            const int cmp = QStringView(a).mid(ia, lena).compare(QStringView(b).mid(ib, lenb));
+            if (cmp != 0)
+                return cmp;
+            const int rawa = enda - i;
+            const int rawb = endb - j;
+            if (rawa != rawb)
+                return rawa < rawb ? -1 : 1;
+            i = enda;
+            j = endb;
+            continue;
+        }
+        const QChar la = ca.toLower();
+        const QChar lb = cb.toLower();
+        if (la != lb)
+            return la.unicode() < lb.unicode() ? -1 : 1;
+        ++i;
+        ++j;
+    }
+    if (a.size() == b.size())
+        return 0;
+    return a.size() < b.size() ? -1 : 1;
+}
+
+QStringList mediaFilesBeside(const QString &filePath, int *startIndex)
+{
+    if (startIndex)
+        *startIndex = 0;
+    const QFileInfo selected(filePath);
+    if (!selected.isFile())
+        return {};
+    const QString selectedPath = selected.absoluteFilePath();
+    const QDir dir(selected.absolutePath());
+    const QStringList names = dir.entryList(QDir::Files | QDir::Readable, QDir::NoSort);
+    QStringList paths;
+    paths.reserve(names.size());
+    for (const QString &name : names) {
+        const QString path = dir.absoluteFilePath(name);
+        if (isMediaFile(path))
+            paths.append(path);
+    }
+    std::sort(paths.begin(), paths.end(), [](const QString &a, const QString &b) {
+        return naturalNameCompare(QFileInfo(a).fileName(), QFileInfo(b).fileName()) < 0;
+    });
+    for (int i = 0; i < paths.size(); ++i) {
+        if (paths.at(i) == selectedPath) {
+            if (startIndex)
+                *startIndex = i;
+            break;
+        }
+    }
+    return paths;
+}
+
+QString mediaOpenFilter()
+{
+    QStringList globs;
+    globs.reserve(kAudioExt.size() + kVideoExt.size());
+    for (const QString &ext : kAudioExt)
+        globs.append(QStringLiteral("*.") + ext);
+    for (const QString &ext : kVideoExt)
+        globs.append(QStringLiteral("*.") + ext);
+    return QStringLiteral("Media (") + globs.join(QLatin1Char(' ')) + QStringLiteral(");;All files (*)");
+}
+
+QStringList supportedMimeTypes()
+{
+    // Same set as share/vesper.desktop. Aliases are included so a file manager
+    // that looks up either name still lands here. .ts linguist files and the
+    // Apple .spx profiler type are not media and stay out.
+    return {
+        QStringLiteral("audio/mpeg"),
+        QStringLiteral("audio/mp3"),
+        QStringLiteral("audio/x-mp3"),
+        QStringLiteral("audio/x-mpeg"),
+        QStringLiteral("audio/x-mpg"),
+        QStringLiteral("audio/flac"),
+        QStringLiteral("audio/x-flac"),
+        QStringLiteral("audio/ogg"),
+        QStringLiteral("audio/x-ogg"),
+        QStringLiteral("audio/vorbis"),
+        QStringLiteral("audio/x-vorbis"),
+        QStringLiteral("audio/x-vorbis+ogg"),
+        QStringLiteral("audio/x-oggflac"),
+        QStringLiteral("audio/opus"),
+        QStringLiteral("audio/x-opus+ogg"),
+        QStringLiteral("audio/x-flac+ogg"),
+        QStringLiteral("audio/mp4"),
+        QStringLiteral("audio/x-m4a"),
+        QStringLiteral("audio/m4a"),
+        QStringLiteral("audio/wav"),
+        QStringLiteral("audio/x-wav"),
+        QStringLiteral("audio/vnd.wave"),
+        QStringLiteral("audio/aac"),
+        QStringLiteral("audio/x-aac"),
+        QStringLiteral("audio/x-aiff"),
+        QStringLiteral("audio/aiff"),
+        QStringLiteral("audio/x-ms-wma"),
+        QStringLiteral("audio/wma"),
+        QStringLiteral("audio/x-ape"),
+        QStringLiteral("audio/x-wavpack"),
+        QStringLiteral("audio/x-tta"),
+        QStringLiteral("audio/tta"),
+        QStringLiteral("audio/x-speex"),
+        QStringLiteral("audio/x-speex+ogg"),
+        QStringLiteral("audio/x-matroska"),
+        QStringLiteral("audio/mp2"),
+        QStringLiteral("audio/x-mp2"),
+        QStringLiteral("audio/webm"),
+        QStringLiteral("audio/x-caf"),
+        QStringLiteral("application/ogg"),
+        QStringLiteral("application/x-ogg"),
+        QStringLiteral("video/mp4"),
+        QStringLiteral("video/x-m4v"),
+        QStringLiteral("video/x-matroska"),
+        QStringLiteral("video/webm"),
+        QStringLiteral("video/x-msvideo"),
+        QStringLiteral("video/vnd.avi"),
+        QStringLiteral("video/avi"),
+        QStringLiteral("video/quicktime"),
+        QStringLiteral("video/x-ms-wmv"),
+        QStringLiteral("video/x-flv"),
+        QStringLiteral("video/flv"),
+        QStringLiteral("application/x-flash-video"),
+        QStringLiteral("video/mpeg"),
+        QStringLiteral("video/mp2t"),
+        QStringLiteral("video/3gpp"),
+        QStringLiteral("video/3gp"),
+        QStringLiteral("video/ogg"),
+        QStringLiteral("video/x-ogg"),
+        QStringLiteral("video/x-theora+ogg"),
+        QStringLiteral("video/x-theora"),
+        QStringLiteral("video/x-matroska-3d"),
+    };
+}
+
+int mediaBesideSelfCheck()
+{
+    QTemporaryDir dir;
+    if (!dir.isValid()) {
+        std::fprintf(stderr, "beside: no temp dir\n");
+        return 1;
+    }
+    const QString root = dir.path();
+    const QStringList names = {
+        QStringLiteral("10 Song.mp3"),
+        QStringLiteral("2 Song.flac"),
+        QStringLiteral("1 Song.mp3"),
+        QStringLiteral("notes.txt"),
+        QStringLiteral("clip.mkv"),
+        QStringLiteral(".hidden.mp3"),
+    };
+    for (const QString &name : names) {
+        QFile file(root + QLatin1Char('/') + name);
+        if (!file.open(QIODevice::WriteOnly)) {
+            std::fprintf(stderr, "beside: cannot write %s\n", qPrintable(name));
+            return 1;
+        }
+        file.write("x");
+    }
+    QDir(root).mkdir(QStringLiteral("nested"));
+    QFile nested(root + QStringLiteral("/nested/inside.mp3"));
+    if (!nested.open(QIODevice::WriteOnly))
+        return 1;
+    nested.write("x");
+
+    int index = -1;
+    const QStringList paths = mediaFilesBeside(root + QStringLiteral("/2 Song.flac"), &index);
+    const QStringList expect = {
+        root + QStringLiteral("/1 Song.mp3"),
+        root + QStringLiteral("/2 Song.flac"),
+        root + QStringLiteral("/10 Song.mp3"),
+        root + QStringLiteral("/clip.mkv"),
+    };
+    if (paths != expect || index != 1) {
+        std::fprintf(stderr, "beside: index %d\n", index);
+        for (const QString &path : paths)
+            std::fprintf(stderr, "  %s\n", qPrintable(path));
+        return 1;
+    }
+    return 0;
 }
 
 bool isStreamUrl(const QString &path)

@@ -5,6 +5,7 @@
 #include "player.h"
 #include "settings.h"
 #include "tags.h"
+#include "youtube.h"
 
 #include <QDate>
 #include <QDateTime>
@@ -19,6 +20,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPointer>
+#include <QPromise>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSqlDatabase>
@@ -530,6 +532,55 @@ struct GroomPlan {
     QList<Track> renames;
 };
 
+QString timeLeftText(qint64 ms)
+{
+    if (ms < 5000)
+        return QStringLiteral("a few seconds left");
+    const qint64 sec = (ms + 999) / 1000;
+    if (sec < 60)
+        return QStringLiteral("%1 sec left").arg(qMax(qint64(5), (sec / 5) * 5));
+    const qint64 min = (sec + 30) / 60;
+    if (min < 60)
+        return QStringLiteral("%1 min left").arg(qMax(qint64(1), min));
+    const qint64 hr = min / 60;
+    const qint64 rem = min % 60;
+    if (rem == 0)
+        return QStringLiteral("%1 hr left").arg(hr);
+    return QStringLiteral("%1 hr %2 min left").arg(hr).arg(rem);
+}
+
+struct RenameOutcome {
+    bool renamed = false;
+    QString before;
+    QString dest;
+    Track stored;
+};
+
+// File rename and tag write only. The library row is updated on the UI thread.
+RenameOutcome writeIdentityFiles(const Track &stored)
+{
+    RenameOutcome out;
+    out.stored = stored;
+    out.before = stored.path;
+    if (stored.path.isEmpty() || isStreamUrl(stored.path))
+        return out;
+    const QString base = mediaBaseName(stored);
+    const QString current = QFileInfo(stored.path).completeBaseName();
+    if (!base.isEmpty() && base != current) {
+        const QString dest = uniqueMediaPath(stored.path, base);
+        QString moveError;
+        if (moveMediaWithSidecars(stored.path, dest, &moveError)
+            && QFileInfo(dest).absoluteFilePath() != QFileInfo(stored.path).absoluteFilePath()) {
+            out.renamed = true;
+            out.dest = dest;
+            out.stored.path = dest;
+        }
+    }
+    QString tagError;
+    writeTrackTags(out.stored, &tagError);
+    return out;
+}
+
 int writeSeriesNumbers(const QString &dbPath, const QList<IdItem> &items)
 {
     if (dbPath.isEmpty() || items.isEmpty())
@@ -605,10 +656,20 @@ void IdNamer::beginGroom(bool thenAsk)
     groomRenamed_ = 0;
     renameQueue_.clear();
     renameAt_ = 0;
-    emit statusChanged(QStringLiteral("Checking file names…"));
+    renameStartedMs_ = 0;
+    emit working(-1, QStringLiteral("Checking file names\nReading the library\n"));
     const QString dbPath = dataDir() + QStringLiteral("/library.db");
     auto *watcher = new QFutureWatcher<GroomPlan>(this);
     QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<GroomPlan>::progressTextChanged, this, [self](const QString &text) {
+        if (!self)
+            return;
+        int percent = -1;
+        const QString line = text.section(QLatin1Char('\n'), 1, 1).trimmed();
+        if (line.contains(QLatin1Char('%')))
+            percent = line.section(QLatin1Char('%'), 0, 0).trimmed().toInt();
+        emit self->working(percent, text);
+    });
     connect(watcher, &QFutureWatcher<GroomPlan>::finished, this, [self, watcher] {
         const GroomPlan plan = watcher->result();
         watcher->deleteLater();
@@ -617,14 +678,52 @@ void IdNamer::beginGroom(bool thenAsk)
         self->groomNumbered_ = plan.numbered;
         self->renameQueue_ = plan.renames;
         self->renameAt_ = 0;
+        self->renameStartedMs_ = 0;
         self->applyRenameChunk();
     });
-    watcher->setFuture(QtConcurrent::run([dbPath] {
-        GroomPlan plan;
+    watcher->setFuture(QtConcurrent::run([dbPath](QPromise<GroomPlan> &promise) {
+        // Percent, remaining time, and the current file are filled here, on
+        // the pool thread. The window only paints the note.
+        qint64 lastMs = 0;
+        qint64 startedMs = 0;
+        auto report = [&](const QString &summary, const QString &path, int done, int total, bool force) {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (!force && lastMs != 0 && now - lastMs < 200)
+                return;
+            lastMs = now;
+            if (startedMs == 0)
+                startedMs = now;
+            QString line = summary;
+            int percent = -1;
+            if (total > 0 && done > 0) {
+                percent = qBound(0, done * 100 / total, 99);
+                line = QStringLiteral("%1% · %2 of %3").arg(percent).arg(done).arg(total);
+                if (!summary.isEmpty())
+                    line = summary + QStringLiteral(" · ") + line;
+                const qint64 elapsed = now - startedMs;
+                if (total > done && elapsed >= 1500) {
+                    const qint64 eta = elapsed * qint64(total - done) / qint64(done);
+                    if (eta > 0)
+                        line += QStringLiteral(" · ") + timeLeftText(eta);
+                } else if (done >= total && total > 0)
+                    line += QStringLiteral(" · a few seconds left");
+            }
+            const QString file = path.isEmpty() ? QString() : QFileInfo(path).fileName();
+            promise.setProgressValueAndText(percent < 0 ? 0 : percent,
+                                            QStringLiteral("Checking file names\n%1\n%2").arg(line, file));
+        };
+
+        report(QStringLiteral("Reading the library"), {}, 0, 0, true);
         const QList<Track> videos = readTracksKind(dbPath, QStringLiteral("video"));
+        report(QStringLiteral("Numbering series"), {}, 0, 0, true);
+        GroomPlan plan;
         plan.numbered = writeSeriesNumbers(dbPath, planLocalSeries(videos));
         const QList<Track> all = readTracksKind(dbPath, QString());
-        for (const Track &track : all) {
+        const int total = all.size();
+        for (int i = 0; i < total; ++i) {
+            const Track &track = all.at(i);
+            const bool last = i + 1 == total;
+            report({}, track.path, i + 1, total, last);
             if (track.id <= 0 || track.path.isEmpty() || isStreamUrl(track.path))
                 continue;
             const QFileInfo info(track.path);
@@ -636,29 +735,63 @@ void IdNamer::beginGroom(bool thenAsk)
                 continue;
             plan.renames.append(track);
         }
-        return plan;
+        promise.addResult(plan);
     }));
 }
 
 void IdNamer::applyRenameChunk()
 {
-    const int end = qMin(renameAt_ + 1, renameQueue_.size());
-    for (; renameAt_ < end; ++renameAt_) {
-        const Track track = renameQueue_.at(renameAt_);
-        const QString before = track.path;
-        commitIdentity(library_, player_, track, true, true, nullptr);
-        const Track after = library_->trackById(track.id);
-        if (after.id > 0 && QFileInfo(after.path).absoluteFilePath() != QFileInfo(before).absoluteFilePath())
-            ++groomRenamed_;
-    }
-    if (renameAt_ < renameQueue_.size()) {
-        QTimer::singleShot(40, this, [this] { applyRenameChunk(); });
+    if (renameAt_ >= renameQueue_.size()) {
+        renameQueue_.clear();
+        if (groomNumbered_ > 0 || groomRenamed_ > 0)
+            library_->refresh();
+        finishGroom();
         return;
     }
-    renameQueue_.clear();
-    if (groomNumbered_ > 0 || groomRenamed_ > 0)
-        library_->refresh();
-    finishGroom();
+    if (renameStartedMs_ == 0)
+        renameStartedMs_ = QDateTime::currentMSecsSinceEpoch();
+    const int done = renameAt_;
+    const int total = renameQueue_.size();
+    const Track track = renameQueue_.at(done);
+    const int percent = total > 0 ? qBound(0, done * 100 / total, 99) : 0;
+    QString summary = QStringLiteral("%1% · %2 of %3").arg(percent).arg(done).arg(total);
+    if (done > 0 && total > done) {
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - renameStartedMs_;
+        if (elapsed >= 1500) {
+            const qint64 eta = elapsed * qint64(total - done) / qint64(done);
+            if (eta > 0)
+                summary += QStringLiteral(" · ") + timeLeftText(eta);
+        }
+    }
+    emit working(percent, QStringLiteral("Renaming\n%1\n%2")
+                              .arg(summary, QFileInfo(track.path).fileName()));
+
+    library_->updateEditable(track);
+    Track stored = library_->trackById(track.id);
+    if (stored.id <= 0)
+        stored = track;
+    auto *watcher = new QFutureWatcher<RenameOutcome>(this);
+    QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<RenameOutcome>::finished, this, [self, watcher] {
+        const RenameOutcome out = watcher->result();
+        watcher->deleteLater();
+        if (!self)
+            return;
+        if (out.renamed)
+            self->library_->relocateTrack(out.before, out.dest);
+        const Track after = self->library_->trackById(out.stored.id);
+        if (self->player_)
+            self->player_->noteQueued(after.id > 0 ? after : out.stored);
+        if (out.renamed)
+            ++self->groomRenamed_;
+        ++self->renameAt_;
+        self->applyRenameChunk();
+    });
+    // The rename and the tag write run on the pool. This thread only paints
+    // the percent, the time left, and the file name.
+    watcher->setFuture(QtConcurrent::run([stored] {
+        return writeIdentityFiles(stored);
+    }));
 }
 
 void IdNamer::finishGroom()
@@ -729,9 +862,22 @@ void IdNamer::postIdentifyRequest()
     body.insert(QStringLiteral("model"), QStringLiteral("grok-4.7"));
     body.insert(QStringLiteral("temperature"), 0);
     body.insert(QStringLiteral("input"), input);
-    emit statusChanged(QStringLiteral("Asking Grok about %1 id-named file%2")
-                           .arg(cluster_.size())
-                           .arg(cluster_.size() == 1 ? QString() : QStringLiteral("s")));
+    QStringList names;
+    for (const Track &track : cluster_) {
+        const QString name = QFileInfo(track.path).fileName();
+        if (name.isEmpty())
+            continue;
+        names.append(name);
+        if (names.size() == 4)
+            break;
+    }
+    QString shown = names.join(QStringLiteral(", "));
+    if (cluster_.size() > names.size())
+        shown += QStringLiteral(" …");
+    emit working(-1, QStringLiteral("Asking Grok\n%1 id-named file%2\n%3")
+                         .arg(cluster_.size())
+                         .arg(cluster_.size() == 1 ? QString() : QStringLiteral("s"))
+                         .arg(shown));
     QNetworkReply *reply = network_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [this, reply] { handleReply(reply); });
 }
@@ -962,6 +1108,8 @@ int rulesSelfCheck()
         fail(errors, QStringLiteral("usable guess"));
     if (identifyGuessUsable(0.2, guessed))
         fail(errors, QStringLiteral("low confidence should wait"));
+    if (youtubeRulesCheck() != 0)
+        fail(errors, QStringLiteral("youtube channel link"));
 
     if (errors == 0)
         std::fprintf(stderr, "rules: ok\n");

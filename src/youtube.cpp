@@ -328,6 +328,119 @@ QString youtubeWatchUrl(const QString &videoId)
     return QStringLiteral("https://www.youtube.com/watch?v=%1").arg(videoId);
 }
 
+YtChannelRef youtubeChannelRef(const QString &text)
+{
+    YtChannelRef ref;
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty())
+        return ref;
+
+    auto cleanName = [](QString name) {
+        name = QUrl::fromPercentEncoding(name.toUtf8()).trimmed();
+        while (name.endsWith(QLatin1Char('/')))
+            name.chop(1);
+        if (name.startsWith(QLatin1Char('@')))
+            name.remove(0, 1);
+        return name.trimmed();
+    };
+    auto bareId = [](const QString &value) {
+        static const QRegularExpression id(QStringLiteral("^UC[A-Za-z0-9_-]{22}$"));
+        return id.match(value).hasMatch();
+    };
+
+    if (trimmed.startsWith(QLatin1Char('@'))) {
+        ref.name = cleanName(trimmed.section(QLatin1Char('/'), 0, 0));
+        return ref;
+    }
+    if (bareId(trimmed)) {
+        ref.id = trimmed;
+        return ref;
+    }
+
+    QString probe = trimmed;
+    if (probe.startsWith(QLatin1Char('/')))
+        probe = QStringLiteral("https://www.youtube.com") + probe;
+    else if (!probe.contains(QLatin1String("://")) && probe.contains(QLatin1Char('.')))
+        probe = QStringLiteral("https://") + probe;
+    else if (!probe.contains(QLatin1String("://")) && !probe.contains(QLatin1Char(' '))) {
+        ref.name = cleanName(probe.section(QLatin1Char('/'), 0, 0));
+        return ref;
+    }
+
+    const QUrl url(probe);
+    QString host = url.host().toLower();
+    if (host.startsWith(QLatin1String("www.")))
+        host.remove(0, 4);
+    const bool youtube = host == QLatin1String("youtu.be")
+        || host == QLatin1String("youtube.com")
+        || host == QLatin1String("m.youtube.com")
+        || host == QLatin1String("music.youtube.com")
+        || host == QLatin1String("youtube-nocookie.com");
+    if (!youtube)
+        return ref;
+
+    // A watch link, a short, or youtu.be is a video. The channel lives on its own URL.
+    const QString path = url.path();
+    if (host == QLatin1String("youtu.be")
+        || path.startsWith(QLatin1String("/watch"))
+        || path.startsWith(QLatin1String("/shorts/"))
+        || path.startsWith(QLatin1String("/embed/"))
+        || path.startsWith(QLatin1String("/live/"))
+        || path.startsWith(QLatin1String("/v/")))
+        return ref;
+
+    static const QStringList tabs = {
+        QStringLiteral("videos"), QStringLiteral("featured"), QStringLiteral("streams"),
+        QStringLiteral("playlists"), QStringLiteral("shorts"), QStringLiteral("about"),
+        QStringLiteral("community"), QStringLiteral("channels"), QStringLiteral("posts"),
+        QStringLiteral("releases"), QStringLiteral("podcasts"),
+    };
+    QStringList parts = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    while (!parts.isEmpty() && tabs.contains(parts.last(), Qt::CaseInsensitive))
+        parts.removeLast();
+    if (parts.isEmpty())
+        return ref;
+    if (parts.first().compare(QLatin1String("channel"), Qt::CaseInsensitive) == 0 && parts.size() >= 2
+        && bareId(parts.at(1))) {
+        ref.id = parts.at(1);
+        return ref;
+    }
+    if (parts.first().startsWith(QLatin1Char('@'))) {
+        ref.name = cleanName(parts.first());
+        return ref;
+    }
+    if (parts.size() >= 2
+        && (parts.first().compare(QLatin1String("c"), Qt::CaseInsensitive) == 0
+            || parts.first().compare(QLatin1String("user"), Qt::CaseInsensitive) == 0)) {
+        ref.name = cleanName(parts.at(1));
+        return ref;
+    }
+    return ref;
+}
+
+int youtubeRulesCheck()
+{
+    int errors = 0;
+    auto check = [&](const char *url, const char *id, const char *name) {
+        const YtChannelRef ref = youtubeChannelRef(QString::fromUtf8(url));
+        if (ref.id != QLatin1String(id) || ref.name != QLatin1String(name))
+            ++errors;
+    };
+    check("https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw", "UCXuqSBlHAE6Xw-yeJA0Tunw", "");
+    check("https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw/videos", "UCXuqSBlHAE6Xw-yeJA0Tunw", "");
+    check("https://www.youtube.com/@LinusTechTips", "", "LinusTechTips");
+    check("https://www.youtube.com/@LinusTechTips/featured", "", "LinusTechTips");
+    check("https://m.youtube.com/@LinusTechTips/videos", "", "LinusTechTips");
+    check("https://www.youtube.com/c/LinusTechTips", "", "LinusTechTips");
+    check("https://www.youtube.com/user/LinusTechTips", "", "LinusTechTips");
+    check("@LinusTechTips", "", "LinusTechTips");
+    check("UCXuqSBlHAE6Xw-yeJA0Tunw", "UCXuqSBlHAE6Xw-yeJA0Tunw", "");
+    check("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "", "");
+    check("https://youtu.be/dQw4w9WgXcQ", "", "");
+    check("https://www.youtube.com/shorts/dQw4w9WgXcQ", "", "");
+    return errors;
+}
+
 bool youtubeNeedsResolve(const Track &track)
 {
     if (!track.streamUrl.isEmpty() || track.path.isEmpty())
@@ -665,6 +778,25 @@ void YoutubeCatalog::loadPlaylistPiped(int token, const QString &playlistId, con
 
 void YoutubeCatalog::channelVideos(int token, const QString &channelId)
 {
+    if (!channelId.startsWith(QLatin1String("UC"))) {
+        QString link = channelId.trimmed();
+        if (!link.contains(QLatin1String("://"))) {
+            if (!link.startsWith(QLatin1Char('@')))
+                link.prepend(QLatin1Char('@'));
+            link = QStringLiteral("https://www.youtube.com/") + link;
+        }
+        const QString path = QStringLiteral("/api/v1/resolveurl?url=")
+            + QString::fromUtf8(QUrl::toPercentEncoding(link));
+        fetch(instances_, path, [this, token](const QJsonDocument &document, const QString &error) {
+            const QString id = document.object().value(QStringLiteral("ucid")).toString();
+            if (!error.isEmpty() || !id.startsWith(QLatin1String("UC"))) {
+                emit videosReady(token, {}, error.isEmpty() ? QStringLiteral("Couldn't read that channel.") : error, 0);
+                return;
+            }
+            channelVideos(token, id);
+        });
+        return;
+    }
     fetch(instances_, QStringLiteral("/api/v1/channels/") + QString::fromUtf8(QUrl::toPercentEncoding(channelId))
               + QStringLiteral("/videos"),
           [this, token](const QJsonDocument &document, const QString &error) {

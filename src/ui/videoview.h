@@ -5,10 +5,12 @@
 #include <QWidget>
 
 class Library;
+class QListView;
 class QResizeEvent;
 class QShowEvent;
 class TrackModel;
 class TrackProxy;
+class VideoPosterModel;
 
 class VideoView : public QWidget {
     Q_OBJECT
@@ -39,6 +41,8 @@ private:
     Library *library_ = nullptr;
     TrackModel *model_ = nullptr;
     TrackProxy *proxy_ = nullptr;
+    VideoPosterModel *posters_ = nullptr;
+    QListView *grid_ = nullptr;
     class QTableView *table_ = nullptr;
     class QTableWidget *shows_ = nullptr;
     class QStackedWidget *stack_ = nullptr;
@@ -51,5 +55,4 @@ private:
     QString showTitle_;
     QList<Track> cached_;
     bool cacheReady_ = false;
-    int loadToken_ = 0;
 };

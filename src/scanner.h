@@ -31,7 +31,9 @@ public:
         int done = 0;
         int total = 0;
         qint64 startedMs = 0;
+        qint64 etaMs = -1;
         QString file;
+        QString path;
     };
     // Latest sample from the worker. The window polls this so progress never
     // queues widget work onto the UI thread.

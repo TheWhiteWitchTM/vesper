@@ -4,17 +4,26 @@
 #include "player.h"
 #include "settings.h"
 
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QScrollBar>
 #include <QSet>
+#include <QSizePolicy>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
 #include <random>
 
 namespace {
@@ -25,6 +34,178 @@ QString cleanField(QString text)
     text.replace(QLatin1Char('\n'), QLatin1Char(' '));
     return text.trimmed();
 }
+
+class NameLabel : public QLabel {
+public:
+    explicit NameLabel(const QString &text, QWidget *parent = nullptr)
+        : QLabel(parent)
+        , full_(text)
+    {
+        setStyleSheet(QStringLiteral("background: transparent;"));
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setMinimumWidth(0);
+        setText(text);
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLabel::resizeEvent(event);
+        if (eliding_)
+            return;
+        eliding_ = true;
+        const QString shown = fontMetrics().elidedText(full_, Qt::ElideRight, qMax(8, width()));
+        if (text() != shown)
+            setText(shown);
+        eliding_ = false;
+    }
+
+private:
+    QString full_;
+    bool eliding_ = false;
+};
+
+// The check sits at the right of the name. A spin shows there while that
+// channel's videos are still on the way.
+class ChannelMark : public QWidget {
+public:
+    explicit ChannelMark(bool on, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , on_(on)
+    {
+        setFixedSize(40, 28);
+        setCursor(Qt::PointingHandCursor);
+        setToolTip(QStringLiteral("Include this channel in Shuffle"));
+    }
+
+    void setBusy(bool on)
+    {
+        if (busy_ == on)
+            return;
+        busy_ = on;
+        if (on) {
+            if (!spin_) {
+                spin_ = new QTimer(this);
+                spin_->setInterval(50);
+                connect(spin_, &QTimer::timeout, this, [this] {
+                    angle_ = (angle_ + 8) % 360;
+                    update();
+                });
+            }
+            spin_->start();
+        } else if (spin_) {
+            spin_->stop();
+        }
+        update();
+    }
+
+    std::function<void(bool)> toggled;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        if (busy_) {
+            const QRectF ring(1, (height() - 14) / 2.0, 14, 14);
+            QPen pen(QColor(QStringLiteral("#6e5e4c")), 1.8, Qt::SolidLine, Qt::RoundCap);
+            painter.setPen(pen);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(ring);
+            pen.setColor(QColor(QStringLiteral("#e4b15a")));
+            painter.setPen(pen);
+            painter.drawArc(ring, angle_ * 16, 80 * 16);
+        }
+        const QRectF box(width() - 16, (height() - 14) / 2.0, 14, 14);
+        painter.setPen(QPen(on_ ? QColor(QStringLiteral("#e4b15a")) : QColor(QStringLiteral("#6e5e4c")), 1.6));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(box, 3, 3);
+        if (!on_)
+            return;
+        painter.setPen(QPen(QColor(QStringLiteral("#e4b15a")), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath path;
+        path.moveTo(box.left() + 3.0, box.center().y());
+        path.lineTo(box.center().x() - 0.4, box.bottom() - 3.2);
+        path.lineTo(box.right() - 2.4, box.top() + 3.2);
+        painter.drawPath(path);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override { event->accept(); }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override { event->accept(); }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        const QRect box(width() - 20, 0, 20, height());
+        if (event->button() != Qt::LeftButton || !box.contains(event->pos()))
+            return;
+        on_ = !on_;
+        update();
+        if (toggled)
+            toggled(on_);
+        event->accept();
+    }
+
+private:
+    bool on_ = true;
+    bool busy_ = false;
+    int angle_ = 90;
+    QTimer *spin_ = nullptr;
+};
+
+class ChannelRow : public QWidget {
+public:
+    ChannelRow(const QString &name, bool checked, bool busy, QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setAutoFillBackground(false);
+        setStyleSheet(QStringLiteral("background: transparent;"));
+        setCursor(Qt::PointingHandCursor);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setMinimumHeight(32);
+        name_ = new NameLabel(name, this);
+        mark_ = new ChannelMark(checked, this);
+        mark_->setBusy(busy);
+        auto *layout = new QHBoxLayout(this);
+        layout->setContentsMargins(2, 0, 2, 0);
+        layout->setSpacing(4);
+        layout->addWidget(name_, 1);
+        layout->addWidget(mark_, 0, Qt::AlignVCenter);
+        mark_->toggled = [this](bool on) {
+            if (onToggle)
+                onToggle(on);
+        };
+    }
+
+    void setBusy(bool on)
+    {
+        if (mark_)
+            mark_->setBusy(on);
+    }
+
+    std::function<void()> onSelect;
+    std::function<void()> onOpen;
+    std::function<void(bool)> onToggle;
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && onSelect)
+            onSelect();
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && onOpen)
+            onOpen();
+        event->accept();
+    }
+
+private:
+    NameLabel *name_ = nullptr;
+    ChannelMark *mark_ = nullptr;
+};
 
 QString channelLabel(const QString &typed, const QString &id)
 {
@@ -66,19 +247,22 @@ YoutubeView::YoutubeView(Settings *settings, Player *player, QWidget *parent)
 
     auto *favorites = new QLabel(QStringLiteral("Favorite channels"));
     favorites->setObjectName(QStringLiteral("section"));
+    favorites->setToolTip(QStringLiteral(
+        "A check includes that channel in Shuffle. Double-click a channel to play it."));
     channels_ = new QListWidget;
     channels_->setAlternatingRowColors(true);
     channels_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     channelEdit_ = new QLineEdit;
-    channelEdit_->setPlaceholderText(QStringLiteral("Channel link or @name"));
+    channelEdit_->setPlaceholderText(QStringLiteral("Paste a channel link"));
     auto *add = new QPushButton(QStringLiteral("Add"));
     auto *remove = new QPushButton(QStringLiteral("Remove"));
-    auto *shuffle = new QPushButton(QStringLiteral("Shuffle favorites"));
+    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
     shuffle->setObjectName(QStringLiteral("primary"));
+    shuffle->setToolTip(QStringLiteral("Shuffle videos from the checked channels"));
 
     status_ = new QLabel(QStringLiteral(
-        "Plays in the player at the bottom. A playlist queues every song and keeps going."));
+        "Plays in the player at the top. A playlist queues every song and keeps going."));
     status_->setObjectName(QStringLiteral("muted"));
     status_->setWordWrap(true);
 
@@ -117,7 +301,7 @@ YoutubeView::YoutubeView(Settings *settings, Player *player, QWidget *parent)
     connect(add, &QPushButton::clicked, this, &YoutubeView::addChannel);
     connect(channelEdit_, &QLineEdit::returnPressed, this, &YoutubeView::addChannel);
     connect(remove, &QPushButton::clicked, this, &YoutubeView::removeChannel);
-    connect(shuffle, &QPushButton::clicked, this, [this] { shuffleChannels(settings_->youtubeChannels()); });
+    connect(shuffle, &QPushButton::clicked, this, [this] { shuffleChannels(checkedChannels()); });
     connect(player_, &Player::errorOccurred, this, [this](const QString &message) {
         const Track track = player_->current();
         if (youtubeVideoId(track.path).isEmpty() && !youtubeNeedsResolve(track))
@@ -146,9 +330,6 @@ YoutubeView::YoutubeView(Settings *settings, Player *player, QWidget *parent)
             }
         }
         playVideos(videos, index);
-    });
-    connect(channels_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
-        shuffleChannels({{item->data(Qt::UserRole).toString(), item->text()}});
     });
     connect(catalog_, &YoutubeCatalog::streamReady, this, [this](int token, const YtStream &stream, const QString &error) {
         if (token == addToken_) {
@@ -281,18 +462,27 @@ YoutubeView::YoutubeView(Settings *settings, Player *player, QWidget *parent)
         if (playing)
             playToken_ = 0;
         if (link.kind != QLatin1String("channel") || link.id.isEmpty()) {
+            if (adding && !pendingChannel_.isEmpty()) {
+                pendingChannel_.clear();
+                return;
+            }
             const QString message = error.isEmpty() ? QStringLiteral("Couldn't read that channel.") : error;
             if (playing && player_)
                 player_->rejectStream(playGeneration_, message);
             setStatus(message);
             return;
         }
-        const QString typed = adding ? channelEdit_->text() : (playing ? link.id : address_->text());
-        const QString name = channelLabel(typed, link.id);
-        if (adding || opening)
-            rememberChannel(link.id, name);
-        if (adding)
+        const QString typed = adding ? pendingChannel_ : (playing ? link.id : address_->text());
+        const QString name = channelLabel(typed.isEmpty() ? link.id : typed, link.id);
+        if (adding) {
+            replaceChannelId(pendingChannel_, link.id, name);
+            pendingChannel_.clear();
             channelEdit_->clear();
+            setStatus(QStringLiteral("Added %1").arg(name));
+            return;
+        }
+        if (opening)
+            rememberChannel(link.id, name);
         if (playing)
             shufflePlayGeneration_ = playGeneration_;
         shuffleChannels({{link.id, name}});
@@ -372,13 +562,33 @@ void YoutubeView::addChannel()
     const QString text = channelEdit_->text().trimmed();
     if (text.isEmpty())
         return;
-    if (!youtubeVideoId(text).isEmpty()) {
-        setStatus(QStringLiteral("That's a video. Select it in the results and use Save channel."));
+    const YtChannelRef ref = youtubeChannelRef(text);
+    if (ref.id.isEmpty() && ref.name.isEmpty()) {
+        if (!youtubeVideoId(text).isEmpty()) {
+            setStatus(QStringLiteral("That's a video. Paste the channel link."));
+            return;
+        }
+        pendingChannel_.clear();
+        addToken_ = ++seq_;
+        setStatus(QStringLiteral("Looking up that channel…"));
+        catalog_->openLink(addToken_, text);
         return;
     }
+    const QString storedId = ref.id.isEmpty()
+        ? QStringLiteral("@") + ref.name
+        : ref.id;
+    const QString name = channelLabel(ref.name.isEmpty() ? storedId : ref.name, storedId);
+    rememberChannel(storedId, name);
+    channelEdit_->clear();
+    setStatus(QStringLiteral("Added %1").arg(name));
+    if (!ref.id.isEmpty())
+        return;
+    pendingChannel_ = storedId;
     addToken_ = ++seq_;
-    setStatus(QStringLiteral("Looking up that channel…"));
-    catalog_->openLink(addToken_, text);
+    QString lookup = text;
+    if (!lookup.contains(QLatin1String("://")) && !lookup.contains(QLatin1Char('.')))
+        lookup = QStringLiteral("https://www.youtube.com/") + storedId;
+    catalog_->openLink(addToken_, lookup);
 }
 
 void YoutubeView::removeChannel()
@@ -395,6 +605,11 @@ void YoutubeView::removeChannel()
             kept.append(channel);
     }
     settings_->setYoutubeChannels(kept);
+    if (settings_->hasYoutubeChecked()) {
+        QStringList ids = settings_->youtubeChecked();
+        ids.removeAll(id);
+        settings_->setYoutubeChecked(ids);
+    }
     reloadChannels();
     setStatus(QStringLiteral("Removed."));
 }
@@ -407,7 +622,9 @@ void YoutubeView::shuffleChannels(const QList<QPair<QString, QString>> &channels
             usable.append(channel);
     }
     if (usable.isEmpty()) {
-        setStatus(QStringLiteral("Add a favorite channel first."));
+        const bool any = settings_ && !settings_->youtubeChannels().isEmpty();
+        setStatus(any ? QStringLiteral("Check a channel, then shuffle.")
+                      : QStringLiteral("Add a favorite channel first."));
         return;
     }
     shuffleBag_.clear();
@@ -425,6 +642,7 @@ void YoutubeView::shuffleChannels(const QList<QPair<QString, QString>> &channels
 void YoutubeView::startNextChannel()
 {
     if (!catalog_ || shuffleQueue_.isEmpty()) {
+        setChannelBusy({});
         finishShuffle();
         return;
     }
@@ -435,6 +653,7 @@ void YoutubeView::startNextChannel()
         startNextChannel();
         return;
     }
+    setChannelBusy(id);
     const int token = ++seq_;
     shuffleTokens_.insert(token);
     catalog_->channelVideos(token, id);
@@ -442,6 +661,7 @@ void YoutubeView::startNextChannel()
 
 void YoutubeView::finishShuffle()
 {
+    setChannelBusy({});
     const int pending = shufflePlayGeneration_;
     shufflePlayGeneration_ = -1;
     shuffleQueue_.clear();
@@ -483,6 +703,7 @@ void YoutubeView::playVideos(const QList<YtVideo> &videos, int index)
     shuffleLeft_ = 0;
     shuffleBag_.clear();
     shufflePlayGeneration_ = -1;
+    setChannelBusy({});
     if (player_->shuffle())
         player_->setShuffle(false);
     const int start = qBound(0, index, tracks.size() - 1);
@@ -512,18 +733,127 @@ void YoutubeView::rememberChannel(const QString &id, const QString &name)
     }
     channels.append({id, name.isEmpty() ? id : name});
     settings_->setYoutubeChannels(channels);
+    if (settings_->hasYoutubeChecked()) {
+        QStringList ids = settings_->youtubeChecked();
+        if (!ids.contains(id)) {
+            ids.append(id);
+            settings_->setYoutubeChecked(ids);
+        }
+    }
+    reloadChannels();
+}
+
+void YoutubeView::replaceChannelId(const QString &from, const QString &id, const QString &name)
+{
+    if (id.isEmpty())
+        return;
+    if (from.isEmpty() || from == id) {
+        rememberChannel(id, name);
+        return;
+    }
+    QList<QPair<QString, QString>> next;
+    bool wrote = false;
+    for (const auto &channel : settings_->youtubeChannels()) {
+        if (channel.first == from || channel.first == id) {
+            if (wrote)
+                continue;
+            next.append({id, name.isEmpty() ? channel.second : name});
+            wrote = true;
+            continue;
+        }
+        next.append(channel);
+    }
+    if (!wrote)
+        next.append({id, name.isEmpty() ? id : name});
+    settings_->setYoutubeChannels(next);
+    if (settings_->hasYoutubeChecked() && !from.isEmpty() && from != id) {
+        QStringList ids = settings_->youtubeChecked();
+        const int at = ids.indexOf(from);
+        if (at >= 0)
+            ids[at] = id;
+        else if (!ids.contains(id))
+            ids.append(id);
+        settings_->setYoutubeChecked(ids);
+    }
     reloadChannels();
 }
 
 void YoutubeView::reloadChannels()
 {
+    const int scroll = channels_->verticalScrollBar()->value();
+    QString selected;
+    if (QListWidgetItem *current = channels_->currentItem())
+        selected = current->data(Qt::UserRole).toString();
     channels_->clear();
     for (const auto &channel : settings_->youtubeChannels()) {
-        auto *item = new QListWidgetItem(channel.second.isEmpty() ? channel.first : channel.second);
-        item->setData(Qt::UserRole, channel.first);
-        item->setToolTip(channel.first);
+        const QString id = channel.first;
+        const QString name = channel.second.isEmpty() ? id : channel.second;
+        auto *item = new QListWidgetItem(name);
+        item->setData(Qt::UserRole, id);
+        item->setToolTip(id);
+        item->setSizeHint(QSize(120, 34));
         channels_->addItem(item);
+        auto *row = new ChannelRow(name, channelChecked(id), id == busyChannel_);
+        row->onSelect = [this, item] { channels_->setCurrentItem(item); };
+        row->onOpen = [this, id, name] { shuffleChannels({{id, name}}); };
+        row->onToggle = [this, id](bool on) { toggleChannelCheck(id, on); };
+        channels_->setItemWidget(item, row);
+        if (id == selected)
+            channels_->setCurrentItem(item);
     }
+    channels_->verticalScrollBar()->setValue(scroll);
+}
+
+void YoutubeView::setChannelBusy(const QString &id)
+{
+    if (busyChannel_ == id)
+        return;
+    busyChannel_ = id;
+    for (int i = 0; i < channels_->count(); ++i) {
+        QListWidgetItem *item = channels_->item(i);
+        auto *row = static_cast<ChannelRow *>(channels_->itemWidget(item));
+        if (row)
+            row->setBusy(item->data(Qt::UserRole).toString() == id);
+    }
+}
+
+void YoutubeView::toggleChannelCheck(const QString &id, bool on)
+{
+    if (!settings_ || id.isEmpty())
+        return;
+    QStringList ids;
+    if (settings_->hasYoutubeChecked())
+        ids = settings_->youtubeChecked();
+    else {
+        for (const auto &channel : settings_->youtubeChannels())
+            ids.append(channel.first);
+    }
+    if (on) {
+        if (!ids.contains(id))
+            ids.append(id);
+    } else {
+        ids.removeAll(id);
+    }
+    settings_->setYoutubeChecked(ids);
+}
+
+bool YoutubeView::channelChecked(const QString &id) const
+{
+    if (!settings_ || !settings_->hasYoutubeChecked())
+        return true;
+    return settings_->youtubeChecked().contains(id);
+}
+
+QList<QPair<QString, QString>> YoutubeView::checkedChannels() const
+{
+    QList<QPair<QString, QString>> picked;
+    if (!settings_)
+        return picked;
+    for (const auto &channel : settings_->youtubeChannels()) {
+        if (channelChecked(channel.first))
+            picked.append(channel);
+    }
+    return picked;
 }
 
 void YoutubeView::prefetchAhead()

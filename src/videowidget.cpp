@@ -3,6 +3,8 @@
 #include <QDateTime>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
+#include <QTimer>
 #include <cstring>
 
 VideoWidget::VideoWidget(QWidget *parent)
@@ -34,6 +36,28 @@ void VideoWidget::clearFrame()
     frame_ = QImage();
     shown_ = QImage();
     has_ = false;
+    update();
+}
+
+void VideoWidget::setBusy(bool on)
+{
+    if (busy_ == on)
+        return;
+    busy_ = on;
+    if (on) {
+        if (!spin_) {
+            spin_ = new QTimer(this);
+            spin_->setInterval(50);
+            connect(spin_, &QTimer::timeout, this, [this] {
+                spinAngle_ = (spinAngle_ + 8) % 360;
+                if (busy_)
+                    update();
+            });
+        }
+        spin_->start();
+    } else if (spin_) {
+        spin_->stop();
+    }
     update();
 }
 
@@ -168,8 +192,21 @@ void VideoWidget::paintEvent(QPaintEvent *)
         QMutexLocker lock(&mutex_);
         frame = frame_;
     }
-    if (frame.isNull())
+    if (frame.isNull()) {
+        if (!busy_)
+            return;
+        painter.setRenderHint(QPainter::Antialiasing);
+        const qreal side = qBound(28.0, qMin(width(), height()) * 0.14, 54.0);
+        const QRectF ring(width() / 2.0 - side / 2.0, height() / 2.0 - side / 2.0, side, side);
+        QPen pen(QColor(QStringLiteral("#3a322a")), 3.0, Qt::SolidLine, Qt::RoundCap);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(ring);
+        pen.setColor(QColor(QStringLiteral("#e4b15a")));
+        painter.setPen(pen);
+        painter.drawArc(ring, spinAngle_ * 16, 80 * 16);
         return;
+    }
     const QSize scaled = frame.size().scaled(size(), Qt::KeepAspectRatio);
     const QRect target(QPoint((width() - scaled.width()) / 2, (height() - scaled.height()) / 2), scaled);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, scaled.width() < frame.width());

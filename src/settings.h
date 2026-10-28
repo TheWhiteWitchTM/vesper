@@ -68,6 +68,10 @@ public:
     // channel id, name
     QList<QPair<QString, QString>> youtubeChannels() const;
     void setYoutubeChannels(const QList<QPair<QString, QString>> &channels);
+    // Absent until the first toggle. Until then every saved channel counts as checked.
+    bool hasYoutubeChecked() const;
+    QStringList youtubeChecked() const;
+    void setYoutubeChecked(const QStringList &ids);
 
     bool kidsMode() const;
     void setKidsMode(bool on);

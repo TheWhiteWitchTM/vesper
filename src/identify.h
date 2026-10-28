@@ -44,6 +44,9 @@ public:
 
 signals:
     void statusChanged(const QString &text);
+    // percent is -1 while the total is still unknown. The note is
+    // "title\nsummary\nfile". The worker fills it; the window only paints it.
+    void working(int percent, const QString &note);
     void noteChanged();
 
 private:
@@ -68,6 +71,7 @@ private:
     int renameAt_ = 0;
     int groomNumbered_ = 0;
     int groomRenamed_ = 0;
+    qint64 renameStartedMs_ = 0;
     bool grooming_ = false;
     bool groomThenAsk_ = false;
     bool busy_ = false;

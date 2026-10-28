@@ -3,12 +3,16 @@
 #include "artloader.h"
 #include "library.h"
 
+#include <QDateTime>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QSizePolicy>
 #include <QTime>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -17,16 +21,31 @@ HomeView::HomeView(Library *library, QWidget *parent)
     , library_(library)
 {
     auto *scroll = new QScrollArea(this);
+    scroll_ = scroll;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setFocusPolicy(Qt::NoFocus);
     contentWidget_ = new QWidget;
     content_ = new QVBoxLayout(contentWidget_);
-    content_->setContentsMargins(28, 24, 28, 28);
-    content_->setSpacing(8);
+    content_->setContentsMargins(0, 2, 0, 18);
+    content_->setSpacing(6);
     scroll->setWidget(contentWidget_);
+    connect(scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        if (value != 0 && QDateTime::currentMSecsSinceEpoch() < scrollLockUntil_)
+            scroll_->verticalScrollBar()->setValue(0);
+    });
+
+    // The greeting lives in the scrolling page, so it leaves with the shelves.
+    greeting_ = new QLabel(contentWidget_);
+    greeting_->setObjectName(QStringLiteral("homeGreeting"));
+    greeting_->setWordWrap(false);
+    greeting_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    greeting_->setMinimumWidth(0);
+
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->addWidget(scroll);
+    outer->setContentsMargins(22, 6, 22, 0);
+    outer->setSpacing(0);
+    outer->addWidget(scroll, 1);
     connect(ArtLoader::instance(), &ArtLoader::ready, this, [this] {
         if (isVisible())
             refreshArt();
@@ -51,11 +70,9 @@ QWidget *HomeView::welcome() const
     add->setObjectName(QStringLiteral("primary"));
     auto *home = new QPushButton(QStringLiteral("Scan home"));
     auto *computer = new QPushButton(QStringLiteral("Scan this computer"));
-    auto *organize = new QPushButton(QStringLiteral("Organize names"));
     row->addWidget(add);
     row->addWidget(home);
     row->addWidget(computer);
-    row->addWidget(organize);
     row->addStretch();
     layout->addWidget(title);
     layout->addWidget(copy);
@@ -64,7 +81,6 @@ QWidget *HomeView::welcome() const
     connect(add, &QPushButton::clicked, this, &HomeView::addFolder);
     connect(home, &QPushButton::clicked, this, &HomeView::scanHome);
     connect(computer, &QPushButton::clicked, this, &HomeView::scanComputer);
-    connect(organize, &QPushButton::clicked, this, &HomeView::organizeRequested);
     return box;
 }
 
@@ -74,7 +90,7 @@ void HomeView::addTrackRow(QVBoxLayout *layout, const QString &heading, const QL
         return;
     auto *label = new QLabel(heading);
     label->setObjectName(QStringLiteral("section"));
-    layout->addSpacing(12);
+    layout->addSpacing(4);
     layout->addWidget(label);
     auto *rowWidget = new QWidget;
     auto *row = new QHBoxLayout(rowWidget);
@@ -88,6 +104,7 @@ void HomeView::addTrackRow(QVBoxLayout *layout, const QString &heading, const QL
         button->setIconSize(QSize(132, 132));
         button->setFixedSize(156, 196);
         button->setCursor(Qt::PointingHandCursor);
+        button->setFocusPolicy(Qt::NoFocus);
         button->setProperty("artPath", track.artwork);
         button->setProperty("artKey", track.path);
         button->setProperty("artTitle", track.displayTitle());
@@ -108,6 +125,7 @@ void HomeView::addTrackRow(QVBoxLayout *layout, const QString &heading, const QL
     auto *scroller = new QScrollArea;
     scroller->setWidgetResizable(true);
     scroller->setFrameShape(QFrame::NoFrame);
+    scroller->setFocusPolicy(Qt::NoFocus);
     scroller->setFixedHeight(214);
     scroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroller->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -117,41 +135,33 @@ void HomeView::addTrackRow(QVBoxLayout *layout, const QString &heading, const QL
 
 void HomeView::reload()
 {
+    scrollLockUntil_ = QDateTime::currentMSecsSinceEpoch() + 500;
     while (QLayoutItem *item = content_->takeAt(0)) {
-        delete item->widget();
+        QWidget *widget = item->widget();
+        if (widget == greeting_)
+            widget = nullptr;
+        delete widget;
         delete item;
     }
     const LibraryStats stats = library_->stats();
     const int hour = QTime::currentTime().hour();
-    const QString greeting = hour < 5 ? QStringLiteral("Good night")
+    const QString hello = hour < 5 ? QStringLiteral("Good night")
         : hour < 12 ? QStringLiteral("Good morning")
         : hour < 18 ? QStringLiteral("Good afternoon")
                     : QStringLiteral("Good evening");
-    auto *hero = new QLabel(greeting);
-    hero->setObjectName(QStringLiteral("hero"));
-    content_->addWidget(hero);
+    const bool empty = stats.audio + stats.video == 0 && library_->folders().isEmpty();
+    greeting_->setText(empty ? hello
+                             : QStringLiteral("%1   ·   %2 songs   ·   %3 videos")
+                                   .arg(hello)
+                                   .arg(stats.audio)
+                                   .arg(stats.video));
+    content_->addWidget(greeting_);
 
-    if (stats.audio + stats.video == 0 && library_->folders().isEmpty()) {
+    if (empty) {
         content_->addWidget(welcome());
         content_->addStretch();
         return;
     }
-
-    auto *summary = new QLabel(QStringLiteral("%1 songs  ·  %2 videos  ·  %3")
-                                   .arg(stats.audio)
-                                   .arg(stats.video)
-                                   .arg(formatTime(stats.durationMs)));
-    summary->setObjectName(QStringLiteral("muted"));
-    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
-    shuffle->setObjectName(QStringLiteral("primary"));
-    auto *organize = new QPushButton(QStringLiteral("Organize names"));
-    auto *summaryRow = new QHBoxLayout;
-    summaryRow->addWidget(summary, 1);
-    summaryRow->addWidget(shuffle);
-    summaryRow->addWidget(organize);
-    content_->addLayout(summaryRow);
-    connect(shuffle, &QPushButton::clicked, this, &HomeView::shuffleRequested);
-    connect(organize, &QPushButton::clicked, this, &HomeView::organizeRequested);
 
     const QList<Track> watching = library_->continueWatching(12);
     addTrackRow(content_, QStringLiteral("Continue watching"), watching);
@@ -163,7 +173,7 @@ void HomeView::reload()
     if (!albums.isEmpty()) {
         auto *label = new QLabel(QStringLiteral("Albums"));
         label->setObjectName(QStringLiteral("section"));
-        content_->addSpacing(12);
+        content_->addSpacing(4);
         content_->addWidget(label);
         auto *rowWidget = new QWidget;
         auto *row = new QHBoxLayout(rowWidget);
@@ -176,6 +186,7 @@ void HomeView::reload()
             button->setIconSize(QSize(132, 132));
             button->setFixedSize(156, 196);
             button->setCursor(Qt::PointingHandCursor);
+            button->setFocusPolicy(Qt::NoFocus);
             button->setProperty("artPath", album.artwork);
             button->setProperty("artKey", album.albumArtist + album.album);
             button->setProperty("artTitle", album.album);
@@ -192,6 +203,7 @@ void HomeView::reload()
         row->addStretch();
         auto *scroller = new QScrollArea;
         scroller->setFrameShape(QFrame::NoFrame);
+        scroller->setFocusPolicy(Qt::NoFocus);
         scroller->setFixedHeight(214);
         scroller->setWidgetResizable(true);
         scroller->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -199,6 +211,12 @@ void HomeView::reload()
         content_->addWidget(scroller);
     }
     content_->addStretch();
+    if (scroll_)
+        scroll_->verticalScrollBar()->setValue(0);
+    QTimer::singleShot(0, this, [this] {
+        if (scroll_)
+            scroll_->verticalScrollBar()->setValue(0);
+    });
 }
 
 void HomeView::refreshArt()

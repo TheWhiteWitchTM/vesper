@@ -1,25 +1,23 @@
 #include "ui/videoview.h"
 
 #include "library.h"
+#include "ui/coverdelegate.h"
 #include "ui/trackmodel.h"
 
-#include <QFont>
-#include <QFutureWatcher>
 #include <QHash>
 #include <QHeaderView>
 #include <QLabel>
+#include <QListView>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStackedWidget>
-#include <QStyledItemDelegate>
 #include <QTableView>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QtConcurrent>
 
 #include <algorithm>
 
@@ -41,24 +39,81 @@ void setCountCell(QTableWidget *table, int row, int column, int value)
     table->setItem(row, column, item);
 }
 
-// The title is the row. A larger face keeps it readable when the pane is narrow.
-class TitleDelegate : public QStyledItemDelegate {
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-
-    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
-    {
-        QStyledItemDelegate::initStyleOption(option, index);
-        if (index.column() != 2)
-            return;
-        QFont font = option->font;
-        font.setPointSize(15);
-        font.setWeight(QFont::Medium);
-        option->font = font;
-    }
-};
-
 } // namespace
+
+class VideoPosterModel : public QAbstractListModel {
+public:
+    explicit VideoPosterModel(QObject *parent = nullptr)
+        : QAbstractListModel(parent)
+    {
+    }
+
+    void setTracks(const QList<Track> &tracks)
+    {
+        beginResetModel();
+        rows_ = tracks;
+        endResetModel();
+    }
+
+    void updateTrack(const Track &track)
+    {
+        for (int row = 0; row < rows_.size(); ++row) {
+            if (rows_.at(row).id != track.id)
+                continue;
+            rows_[row] = track;
+            const QModelIndex cell = index(row, 0);
+            emit dataChanged(cell, cell);
+            return;
+        }
+    }
+
+    QList<Track> tracks() const { return rows_; }
+
+    int rowCount(const QModelIndex &parent = {}) const override
+    {
+        return parent.isValid() ? 0 : rows_.size();
+    }
+
+    QVariant data(const QModelIndex &index, int role) const override
+    {
+        if (!index.isValid() || index.row() >= rows_.size())
+            return {};
+        const Track &track = rows_.at(index.row());
+        if (role == CoverRoles::TrackRole)
+            return QVariant::fromValue(track);
+        switch (role) {
+        case CoverRoles::Title: return track.displayTitle();
+        case CoverRoles::Subtitle: {
+            const QString show = track.showName.trimmed();
+            if (!show.isEmpty() && show.compare(track.displayTitle(), Qt::CaseInsensitive) != 0)
+                return show;
+            return track.year > 0 ? QString::number(track.year) : QString();
+        }
+        case CoverRoles::ArtPath: return track.artwork;
+        case CoverRoles::Key: return QString::number(track.id);
+        case CoverRoles::Badge: {
+            if (track.episode > 0 || track.season > 0) {
+                return QStringLiteral("S%1E%2")
+                    .arg(qMax(0, track.season), 2, 10, QChar('0'))
+                    .arg(qMax(0, track.episode), 2, 10, QChar('0'));
+            }
+            return track.year > 0 ? QString::number(track.year) : QString();
+        }
+        case CoverRoles::Progress: {
+            if (track.durationMs <= 0 || track.positionMs < 10000)
+                return -1;
+            return qBound(0, int(track.positionMs * 100 / track.durationMs), 100);
+        }
+        case Qt::ToolTipRole:
+            return track.displayTitle();
+        default: break;
+        }
+        return {};
+    }
+
+private:
+    QList<Track> rows_;
+};
 
 VideoView::VideoView(Library *library, QWidget *parent)
     : QWidget(parent)
@@ -67,13 +122,18 @@ VideoView::VideoView(Library *library, QWidget *parent)
     moviesButton_ = new QPushButton(QStringLiteral("Movies"));
     showsButton_ = new QPushButton(QStringLiteral("Shows"));
     allButton_ = new QPushButton(QStringLiteral("All"));
-    for (QPushButton *button : {moviesButton_, showsButton_, allButton_}) {
-        button->setCheckable(true);
-        button->setCursor(Qt::PointingHandCursor);
-    }
-    moviesButton_->setChecked(true);
     auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
+    for (QPushButton *button : {moviesButton_, showsButton_, allButton_, shuffle}) {
+        button->setObjectName(QStringLiteral("modeBtn"));
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFixedHeight(28);
+    }
+    for (QPushButton *button : {moviesButton_, showsButton_, allButton_})
+        button->setCheckable(true);
+    moviesButton_->setChecked(true);
     auto *modes = new QHBoxLayout;
+    modes->setContentsMargins(0, 0, 0, 0);
+    modes->setSpacing(4);
     modes->addWidget(moviesButton_);
     modes->addWidget(showsButton_);
     modes->addWidget(allButton_);
@@ -82,6 +142,23 @@ VideoView::VideoView(Library *library, QWidget *parent)
     heading_ = new QLabel(QStringLiteral("Movies. Search still finds the artist and genre."));
     heading_->setObjectName(QStringLiteral("hint"));
 
+    posters_ = new VideoPosterModel(this);
+    grid_ = new QListView;
+    grid_->setModel(posters_);
+    grid_->setViewMode(QListView::IconMode);
+    grid_->setResizeMode(QListView::Adjust);
+    grid_->setMovement(QListView::Static);
+    grid_->setSpacing(2);
+    grid_->setUniformItemSizes(true);
+    grid_->setLayoutMode(QListView::Batched);
+    grid_->setBatchSize(24);
+    grid_->setWordWrap(true);
+    grid_->setMouseTracking(true);
+    grid_->viewport()->setAttribute(Qt::WA_Hover);
+    grid_->setItemDelegate(new CoverDelegate(QSize(168, 214), QSize(140, 140), true, grid_));
+    grid_->setSelectionMode(QAbstractItemView::SingleSelection);
+    grid_->setContextMenuPolicy(Qt::CustomContextMenu);
+
     model_ = new TrackModel(this);
     model_->setVideoLayout(true);
     proxy_ = new TrackProxy(this);
@@ -89,7 +166,6 @@ VideoView::VideoView(Library *library, QWidget *parent)
     table_ = new QTableView;
     table_->setObjectName(QStringLiteral("videoTable"));
     table_->setModel(proxy_);
-    table_->setItemDelegate(new TitleDelegate(table_));
     prepareTable();
 
     shows_ = new QTableWidget;
@@ -111,11 +187,13 @@ VideoView::VideoView(Library *library, QWidget *parent)
     shows_->setSortingEnabled(false);
 
     stack_ = new QStackedWidget;
-    stack_->addWidget(table_);
+    stack_->addWidget(grid_);
     stack_->addWidget(shows_);
+    stack_->addWidget(table_);
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 12, 12, 0);
+    layout->setContentsMargins(8, 6, 8, 0);
+    layout->setSpacing(4);
     layout->addLayout(modes);
     layout->addWidget(heading_);
     layout->addWidget(stack_, 1);
@@ -128,6 +206,20 @@ VideoView::VideoView(Library *library, QWidget *parent)
         QTableWidgetItem *item = shows_->item(row, 0);
         if (item)
             showEpisodes(item->data(Qt::UserRole).toString(), item->text());
+    });
+    connect(grid_, &QListView::doubleClicked, this, [this](const QModelIndex &index) {
+        const QList<Track> tracks = posters_->tracks();
+        if (!tracks.isEmpty())
+            emit playTracks(tracks, index.row());
+    });
+    connect(grid_, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        const QModelIndex index = grid_->indexAt(pos);
+        if (!index.isValid())
+            return;
+        const Track track = index.data(CoverRoles::TrackRole).value<Track>();
+        if (track.id <= 0)
+            return;
+        emit contextTracks({track}, grid_->viewport()->mapToGlobal(pos));
     });
     connect(table_, &QTableView::doubleClicked, this, [this](const QModelIndex &index) {
         const QList<Track> tracks = shownTracks();
@@ -177,7 +269,6 @@ void VideoView::prepareTable()
     table_->setShowGrid(false);
     table_->setWordWrap(false);
     table_->setTextElideMode(Qt::ElideRight);
-    table_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     table_->setSortingEnabled(true);
     table_->verticalHeader()->hide();
     table_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
@@ -186,18 +277,18 @@ void VideoView::prepareTable()
     header->setStretchLastSection(false);
     header->setHighlightSections(false);
     header->setSectionsMovable(false);
-    header->setMinimumSectionSize(28);
-    // Show, genre, and the content label used to keep their own columns.
-    // Those widths ate the row, so the title collapsed to one letter.
-    // They stay on the tooltip and in search.
-    for (int column = 0; column < 8; ++column)
-        header->setSectionResizeMode(column, QHeaderView::Fixed);
+    header->setMinimumSectionSize(36);
+    // Same shape as the song list. Forcing every column to Fixed, then
+    // hiding most of them, left the title with no width at all.
     header->setSectionResizeMode(2, QHeaderView::Stretch);
+    header->setSectionResizeMode(3, QHeaderView::Interactive);
     table_->setColumnWidth(0, 36);
-    table_->setColumnWidth(1, 88);
-    table_->setColumnWidth(5, 84);
-    table_->setColumnWidth(6, 44);
-    table_->setColumnHidden(3, true);
+    table_->setColumnWidth(1, 78);
+    table_->setColumnWidth(3, 200);
+    table_->setColumnWidth(4, 140);
+    table_->setColumnWidth(5, 72);
+    table_->setColumnWidth(6, 46);
+    table_->setColumnWidth(7, 64);
     table_->setColumnHidden(4, true);
     table_->setColumnHidden(7, true);
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -208,17 +299,15 @@ void VideoView::fitColumns()
 {
     if (!table_)
         return;
-    table_->setColumnHidden(3, true);
     table_->setColumnHidden(4, true);
     table_->setColumnHidden(7, true);
     const int width = table_->viewport()->width();
     if (width < 80)
         return;
-    // Side columns stay only while the title still has most of the row.
-    const bool tight = width < 720;
-    table_->setColumnHidden(5, tight);
-    table_->setColumnHidden(6, tight);
-    table_->setColumnHidden(1, tight && mode_ != 3);
+    table_->setColumnHidden(3, width < 560);
+    table_->setColumnHidden(5, width < 420);
+    table_->setColumnHidden(6, width < 480);
+    table_->setColumnHidden(1, width < 360);
 }
 
 void VideoView::resizeEvent(QResizeEvent *event)
@@ -231,6 +320,8 @@ void VideoView::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
     fitColumns();
+    if (!cacheReady_)
+        requestLoad();
 }
 
 QList<Track> VideoView::shownTracks() const
@@ -274,35 +365,23 @@ void VideoView::showEpisodes(const QString &show, const QString &title)
 
 void VideoView::requestLoad()
 {
-    const int token = ++loadToken_;
     if (heading_ && !cacheReady_)
         heading_->setText(QStringLiteral("Loading…"));
-    const QString dbPath = dataDir() + QStringLiteral("/library.db");
-    auto *watcher = new QFutureWatcher<QList<Track>>(this);
-    connect(watcher, &QFutureWatcher<QList<Track>>::finished, this, [this, watcher, token] {
-        const QList<Track> tracks = watcher->result();
-        watcher->deleteLater();
-        if (token != loadToken_)
-            return;
-        cached_ = tracks;
-        cacheReady_ = true;
-        present();
-    });
-    // Read and classify off the window thread. Doing this here used to freeze
-    // the movie list for the whole query.
-    watcher->setFuture(QtConcurrent::run([dbPath] {
-        QList<Track> tracks = readTracksKind(dbPath, QStringLiteral("video"));
-        for (Track &track : tracks) {
-            const SeriesHint hint = seriesHint(track);
-            if (track.showName.trimmed().isEmpty())
-                track.showName = hint.show;
-            if (track.season <= 0)
-                track.season = hint.season;
-            if (track.episode <= 0)
-                track.episode = hint.episode;
-        }
-        return tracks;
-    }));
+    // The song list reads through the open library. A second connection used
+    // to come back with nothing while that one was busy, so this page stayed blank.
+    QList<Track> tracks = library_->tracks(QStringLiteral("video"));
+    for (Track &track : tracks) {
+        const SeriesHint hint = seriesHint(track);
+        if (track.showName.trimmed().isEmpty())
+            track.showName = hint.show;
+        if (track.season <= 0)
+            track.season = hint.season;
+        if (track.episode <= 0)
+            track.episode = hint.episode;
+    }
+    cached_ = tracks;
+    cacheReady_ = true;
+    present();
 }
 
 void VideoView::reload()
@@ -328,6 +407,8 @@ void VideoView::updateTrack(const Track &track)
     }
     if (model_)
         model_->updateTrack(shown);
+    if (posters_)
+        posters_->updateTrack(shown);
 }
 
 void VideoView::noteProbe(qint64 id, qint64 durationMs)
@@ -384,7 +465,7 @@ void VideoView::present()
         shows_->sortByColumn(0, Qt::AscendingOrder);
         heading_->setText(rows.isEmpty()
                               ? QStringLiteral("No shows yet. A Series folder, a season folder, or an S01E02 name files one.")
-                              : QStringLiteral("Shows, then the episodes inside."));
+                              : QStringLiteral("%1 shows. Open one for its episodes.").arg(rows.size()));
         stack_->setCurrentWidget(shows_);
         return;
     }
@@ -411,14 +492,22 @@ void VideoView::present()
                               .arg(shown.size())
                               .arg(shown.size() == 1 ? QString() : QStringLiteral("s")));
     } else if (mode_ == 0) {
-        heading_->setText(QStringLiteral("Movies. Search still finds the artist and genre."));
+        heading_->setText(shown.isEmpty()
+                              ? QStringLiteral("No movies yet.")
+                              : QStringLiteral("%1 movie%2")
+                                    .arg(shown.size())
+                                    .arg(shown.size() == 1 ? QString() : QStringLiteral("s")));
     } else {
-        heading_->setText(QStringLiteral("Every video. Search still finds the artist, show, and genre."));
+        heading_->setText(shown.isEmpty()
+                              ? QStringLiteral("No videos yet.")
+                              : QStringLiteral("%1 video%2")
+                                    .arg(shown.size())
+                                    .arg(shown.size() == 1 ? QString() : QStringLiteral("s")));
     }
     const int scroll = table_->verticalScrollBar()->value();
     int sortColumn = table_->horizontalHeader()->sortIndicatorSection();
     const Qt::SortOrder sortOrder = table_->horizontalHeader()->sortIndicatorOrder();
-    if (sortColumn == 3 || sortColumn == 4 || sortColumn == 7)
+    if (sortColumn == 4 || sortColumn == 7)
         sortColumn = 2;
     table_->setUpdatesEnabled(false);
     table_->setSortingEnabled(false);
@@ -436,5 +525,12 @@ void VideoView::present()
     table_->verticalScrollBar()->setValue(scroll);
     table_->setUpdatesEnabled(true);
     fitColumns();
+    if (mode_ == 0) {
+        const int gridScroll = grid_->verticalScrollBar()->value();
+        posters_->setTracks(shown);
+        grid_->verticalScrollBar()->setValue(gridScroll);
+        stack_->setCurrentWidget(grid_);
+        return;
+    }
     stack_->setCurrentWidget(table_);
 }

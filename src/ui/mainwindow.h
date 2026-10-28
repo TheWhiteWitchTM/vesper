@@ -16,6 +16,7 @@ class QStackedWidget;
 class QSystemTrayIcon;
 class QTableView;
 class QTimer;
+class QToolButton;
 
 struct ScanPop;
 
@@ -31,6 +32,7 @@ class SettingsView;
 class NowPlaying;
 class PlayerGrip;
 class Transport;
+class LcdPlayer;
 class WitchStage;
 class Library;
 class Player;
@@ -41,6 +43,7 @@ class Scanner;
 class VideoWidget;
 class TrackModel;
 class IdNamer;
+class DockTools;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -80,7 +83,15 @@ private:
     void startupScan();
     void setMini(bool on);
     void setFullscreen(bool on, bool user);
+    void setRealFullscreen(bool on);
+    void enterSoftScreen();
+    void leaveSoftScreen();
+    void placeDockTools();
+    bool playerInDock() const;
     void setPlayerCollapsed(bool on);
+    void togglePlayerFill();
+    void applyDockSize();
+    int filledDockHeight() const;
     void applyPlayerFold();
     void dragPlayer(int dy);
     void finishPlayerDrag();
@@ -99,6 +110,14 @@ private:
     void setStatus(const QString &text, bool busy = false);
     void showIdleStatus();
     void relayoutBar();
+    void setSearchOpen(bool on);
+    void setPlayerBusy(bool on);
+    void notePlayerBusy(const Track &track);
+    bool filmInMini() const;
+    int filmMiniHeight() const;
+    void placeLcd();
+    void syncLibraryChrome();
+    void fitMiniWindow();
     bool videoSurface() const;
     void showPlayRail();
     void hidePlayRail();
@@ -123,6 +142,7 @@ private:
     void addLibraryFolder();
     void runSearch();
     Track trackForPath(const QString &path) const;
+    QList<Track> tracksForOpenedFiles(const QStringList &files, const QList<Track> &streams, int *startIndex) const;
     QString notifyIconPath();
 
     Settings *settings_ = nullptr;
@@ -133,6 +153,7 @@ private:
     Prober *prober_ = nullptr;
     Scanner *scanner_ = nullptr;
 
+    QWidget *column_ = nullptr;
     QWidget *sidebar_ = nullptr;
     QLabel *banner_ = nullptr;
     QWidget *resumeBar_ = nullptr;
@@ -143,12 +164,17 @@ private:
     QProgressBar *scanLine_ = nullptr;
     QProgressBar *busyBar_ = nullptr;
     QLineEdit *search_ = nullptr;
+    QToolButton *searchButton_ = nullptr;
+    QWidget *menuTools_ = nullptr;
+    LcdPlayer *lcd_ = nullptr;
+    QToolButton *settingsButton_ = nullptr;
     QStackedWidget *stack_ = nullptr;
     QWidget *miniDock_ = nullptr;
     WitchStage *dockStage_ = nullptr;
     class QVBoxLayout *theaterLayout_ = nullptr;
     class QVBoxLayout *dockLayout_ = nullptr;
     PlayerGrip *playerGrip_ = nullptr;
+    DockTools *dockTools_ = nullptr;
     Transport *transport_ = nullptr;
     QList<QPushButton *> nav_;
     QWidget *playRail_ = nullptr;
@@ -187,17 +213,22 @@ private:
     QLocalServer *server_ = nullptr;
 
     int lastLibraryPage_ = 0;
+    int pageBeforeSettings_ = 0;
     int pageBeforeFs_ = 0;
     bool fullscreen_ = false;
+    bool exclusive_ = false;
+    bool softBeforeReal_ = false;
     bool fsAdjust_ = false;
     qint64 fsToggleMs_ = 0;
     qint64 gripToggleMs_ = 0;
     bool playerFolded_ = false;
+    bool playerExpanded_ = false;
     int dockHeight_ = 188;
     int dragSlack_ = 0;
     bool chromeShown_ = true;
     QPoint lastCursor_;
     bool mini_ = false;
+    bool playerBusy_ = false;
     bool scanning_ = false;
     bool scanPinned_ = false;
     QString activityOwner_;

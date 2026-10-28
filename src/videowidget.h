@@ -12,6 +12,7 @@ public:
     QImage currentFrame() const;
     bool hasFrame() const;
     void clearFrame();
+    void setBusy(bool on);
 
     static unsigned formatCb(void **opaque, char *chroma, unsigned *width, unsigned *height,
                              unsigned *pitches, unsigned *lines);
@@ -41,4 +42,7 @@ private:
     QImage frame_;
     bool has_ = false;
     qint64 lastPresentMs_ = 0;
+    bool busy_ = false;
+    int spinAngle_ = 90;
+    class QTimer *spin_ = nullptr;
 };

@@ -52,7 +52,7 @@ RadioView::RadioView(Settings *settings, Player *player, QWidget *parent)
     auto *title = new QLabel(QStringLiteral("Internet radio"));
     title->setObjectName(QStringLiteral("section"));
     auto *hint = new QLabel(QStringLiteral(
-        "Double-click a station. It plays in the player at the bottom and keeps going when you leave this page."));
+        "Double-click a station. It plays in the player at the top and keeps going when you leave this page."));
     hint->setObjectName(QStringLiteral("muted"));
     hint->setWordWrap(true);
 

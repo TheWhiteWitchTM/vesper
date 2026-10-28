@@ -77,6 +77,38 @@ QIcon Icons::previous(const QColor &color)
     });
 }
 
+QIcon Icons::rewind(const QColor &color)
+{
+    return paint(color, true, [](QPainter &p, const QRectF &r) {
+        auto tri = [&](qreal left) {
+            QPainterPath path;
+            path.moveTo(left + r.width() * 0.36, r.top() + r.height() * 0.18);
+            path.lineTo(left + r.width() * 0.36, r.bottom() - r.height() * 0.18);
+            path.lineTo(left, r.center().y());
+            path.closeSubpath();
+            p.drawPath(path);
+        };
+        tri(r.left() + r.width() * 0.06);
+        tri(r.left() + r.width() * 0.5);
+    });
+}
+
+QIcon Icons::fastForward(const QColor &color)
+{
+    return paint(color, true, [](QPainter &p, const QRectF &r) {
+        auto tri = [&](qreal left) {
+            QPainterPath path;
+            path.moveTo(left, r.top() + r.height() * 0.18);
+            path.lineTo(left, r.bottom() - r.height() * 0.18);
+            path.lineTo(left + r.width() * 0.36, r.center().y());
+            path.closeSubpath();
+            p.drawPath(path);
+        };
+        tri(r.left() + r.width() * 0.08);
+        tri(r.left() + r.width() * 0.52);
+    });
+}
+
 QIcon Icons::volume(const QColor &color)
 {
     return paint(color, false, [](QPainter &p, const QRectF &r) {
@@ -283,6 +315,38 @@ QIcon Icons::settings(const QColor &color)
     });
 }
 
+QIcon Icons::search(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal radius = r.width() * 0.27;
+        const QPointF center(r.left() + radius + r.width() * 0.04, r.top() + radius);
+        p.drawEllipse(center, radius, radius);
+        const QPointF from(center.x() + radius * 0.68, center.y() + radius * 0.68);
+        p.drawLine(from, QPointF(r.right() - r.width() * 0.04, r.bottom() - r.height() * 0.02));
+    });
+}
+
+QIcon Icons::help(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawEllipse(r.adjusted(1, 1, -1, -1));
+        QFont font = p.font();
+        font.setPixelSize(qMax(8, int(r.height() * 0.62)));
+        font.setBold(true);
+        p.setFont(font);
+        p.drawText(r.adjusted(0, -1, 0, 0), Qt::AlignCenter, QStringLiteral("?"));
+    });
+}
+
+QIcon Icons::miniPlayer(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawRoundedRect(r.adjusted(1, r.height() * 0.16, -1, -r.height() * 0.16), 2, 2);
+        const qreal y = r.bottom() - r.height() * 0.38;
+        p.drawLine(QPointF(r.left() + r.width() * 0.18, y), QPointF(r.right() - r.width() * 0.18, y));
+    });
+}
+
 QIcon Icons::spark(const QColor &color)
 {
     return paint(color, false, [](QPainter &p, const QRectF &r) {
@@ -347,6 +411,33 @@ QIcon Icons::chevron(bool down, const QColor &color)
         icon.addPixmap(pixmap);
     }
     return icon;
+}
+
+QIcon Icons::eye(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPainterPath path;
+        path.moveTo(r.left(), r.center().y());
+        path.quadTo(r.center().x(), r.top() + r.height() * 0.08, r.right(), r.center().y());
+        path.quadTo(r.center().x(), r.bottom() - r.height() * 0.08, r.left(), r.center().y());
+        p.drawPath(path);
+        p.setBrush(p.pen().color());
+        const qreal d = r.width() * 0.22;
+        p.drawEllipse(QRectF(r.center().x() - d / 2, r.center().y() - d / 2, d, d));
+    });
+}
+
+QIcon Icons::eyeOff(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPainterPath path;
+        path.moveTo(r.left(), r.center().y());
+        path.quadTo(r.center().x(), r.top() + r.height() * 0.08, r.right(), r.center().y());
+        path.quadTo(r.center().x(), r.bottom() - r.height() * 0.08, r.left(), r.center().y());
+        p.drawPath(path);
+        p.drawLine(r.topRight() + QPointF(-r.width() * 0.08, r.height() * 0.12),
+                   r.bottomLeft() + QPointF(r.width() * 0.08, -r.height() * 0.12));
+    });
 }
 
 QIcon Icons::fullscreen(const QColor &color)

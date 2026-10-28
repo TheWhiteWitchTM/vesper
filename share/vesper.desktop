@@ -7,6 +7,6 @@ Icon=/home/andreas/Projects/vesper/resources/vesper-512.png
 Terminal=false
 Type=Application
 Categories=AudioVideo;Player;Audio;Video;
-MimeType=audio/mpeg;audio/flac;audio/ogg;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/mp4;audio/x-m4a;audio/wav;audio/x-wav;audio/aac;video/mp4;video/x-matroska;video/webm;video/x-msvideo;video/quicktime;application/ogg;
+MimeType=audio/mpeg;audio/mp3;audio/x-mp3;audio/x-mpeg;audio/x-mpg;audio/flac;audio/x-flac;audio/ogg;audio/x-ogg;audio/vorbis;audio/x-vorbis;audio/x-vorbis+ogg;audio/x-oggflac;audio/opus;audio/x-opus+ogg;audio/x-flac+ogg;audio/mp4;audio/x-m4a;audio/m4a;audio/wav;audio/x-wav;audio/vnd.wave;audio/aac;audio/x-aac;audio/x-aiff;audio/aiff;audio/x-ms-wma;audio/wma;audio/x-ape;audio/x-wavpack;audio/x-tta;audio/tta;audio/x-speex;audio/x-speex+ogg;audio/x-matroska;audio/mp2;audio/x-mp2;audio/webm;audio/x-caf;application/ogg;application/x-ogg;video/mp4;video/x-m4v;video/x-matroska;video/webm;video/x-msvideo;video/vnd.avi;video/avi;video/quicktime;video/x-ms-wmv;video/x-flv;video/flv;application/x-flash-video;video/mpeg;video/mp2t;video/3gpp;video/3gp;video/ogg;video/x-ogg;video/x-theora+ogg;video/x-theora;video/x-matroska-3d;
 StartupWMClass=vesper
 Keywords=music;video;player;vlc;

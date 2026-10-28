@@ -15,6 +15,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 SettingsView::SettingsView(Library *library, Settings *settings, Player *player, QWidget *parent)
@@ -101,7 +102,7 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
         "<b>Space</b> play or pause &nbsp;·&nbsp; <b>← →</b> seek 10s &nbsp;·&nbsp; "
         "<b>Shift + ← →</b> seek 1 min &nbsp;·&nbsp; <b>↑ ↓</b> volume<br>"
         "<b>N</b> next &nbsp;·&nbsp; <b>P</b> previous &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; "
-        "<b>H</b> favorite &nbsp;·&nbsp; <b>F11</b> or double-click the picture for full screen &nbsp;·&nbsp; <b>0–9</b> jump in the track<br>"
+        "<b>H</b> favorite &nbsp;·&nbsp; <b>F11</b> fills the screen, and the dock still opens &nbsp;·&nbsp; <b>F12</b> real full screen &nbsp;·&nbsp; <b>Esc</b> leaves it &nbsp;·&nbsp; <b>0–9</b> jump in the track<br>"
         "<b>Ctrl+F</b> search &nbsp;·&nbsp; <b>Ctrl+O</b> open files &nbsp;·&nbsp; "
         "<b>Ctrl+U</b> open a stream &nbsp;·&nbsp; <b>Ctrl+Q</b> quit<br>"
         "Media keys work through the desktop, including on the lock screen controls."));
@@ -125,7 +126,19 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     auto *layout = new QVBoxLayout(inner);
     layout->setContentsMargins(28, 22, 28, 22);
     layout->setSpacing(10);
-    layout->addWidget(title);
+    auto *titleRow = new QHBoxLayout;
+    titleRow->setContentsMargins(0, 0, 0, 0);
+    auto *dismiss = new QToolButton(inner);
+    dismiss->setObjectName(QStringLiteral("barBtn"));
+    dismiss->setText(QStringLiteral("×"));
+    dismiss->setToolTip(QStringLiteral("Close"));
+    dismiss->setCursor(Qt::PointingHandCursor);
+    dismiss->setAutoRaise(true);
+    dismiss->setFixedSize(28, 28);
+    dismiss->setFocusPolicy(Qt::NoFocus);
+    titleRow->addWidget(title, 1);
+    titleRow->addWidget(dismiss);
+    layout->addLayout(titleRow);
     layout->addWidget(new QLabel(QStringLiteral("Library folders")));
     layout->addWidget(folders_);
     auto *roleRow = new QHBoxLayout;
@@ -180,6 +193,7 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     outer->setContentsMargins(0, 0, 0, 0);
     outer->addWidget(scroll);
 
+    connect(dismiss, &QToolButton::clicked, this, &SettingsView::closeRequested);
     connect(add, &QPushButton::clicked, this, &SettingsView::addFolder);
     connect(rescan, &QPushButton::clicked, this, &SettingsView::rescan);
     connect(home, &QPushButton::clicked, this, &SettingsView::scanHome);

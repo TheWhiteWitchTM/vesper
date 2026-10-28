@@ -11,6 +11,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <QtConcurrent>
@@ -62,8 +63,22 @@ OrganizeDialog::OrganizeDialog(const QString &startDir, QWidget *parent)
     buttons->addWidget(close);
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(18, 16, 18, 16);
+    layout->setContentsMargins(18, 10, 14, 16);
     layout->setSpacing(10);
+    auto *titleRow = new QHBoxLayout;
+    auto *heading = new QLabel(QStringLiteral("Rename and organize"), this);
+    heading->setObjectName(QStringLiteral("section"));
+    auto *dismiss = new QToolButton(this);
+    dismiss->setObjectName(QStringLiteral("barBtn"));
+    dismiss->setText(QStringLiteral("×"));
+    dismiss->setToolTip(QStringLiteral("Close"));
+    dismiss->setCursor(Qt::PointingHandCursor);
+    dismiss->setAutoRaise(true);
+    dismiss->setFixedSize(28, 28);
+    dismiss->setFocusPolicy(Qt::NoFocus);
+    titleRow->addWidget(heading, 1);
+    titleRow->addWidget(dismiss);
+    layout->addLayout(titleRow);
     layout->addLayout(folderRow);
     layout->addWidget(tidy_);
     layout->addWidget(help);
@@ -79,6 +94,7 @@ OrganizeDialog::OrganizeDialog(const QString &startDir, QWidget *parent)
     connect(scan, &QPushButton::clicked, this, &OrganizeDialog::scan);
     connect(apply, &QPushButton::clicked, this, &OrganizeDialog::applySelected);
     connect(close, &QPushButton::clicked, this, &QDialog::reject);
+    connect(dismiss, &QToolButton::clicked, this, &QDialog::reject);
     scan->setObjectName(QStringLiteral("scanButton"));
 }
 

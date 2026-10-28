@@ -188,6 +188,22 @@ void Settings::setYoutubeChannels(const QList<QPair<QString, QString>> &channels
     writePairs(settings_, QStringLiteral("youtube/channels"), channels);
 }
 
+bool Settings::hasYoutubeChecked() const
+{
+    return settings_.contains(QStringLiteral("youtube/checked"));
+}
+
+QStringList Settings::youtubeChecked() const
+{
+    return settings_.value(QStringLiteral("youtube/checked")).toStringList();
+}
+
+void Settings::setYoutubeChecked(const QStringList &ids)
+{
+    settings_.setValue(QStringLiteral("youtube/checked"), ids);
+    settings_.sync();
+}
+
 bool Settings::kidsMode() const { return settings_.value(QStringLiteral("kidsMode"), false).toBool(); }
 void Settings::setKidsMode(bool on)
 {

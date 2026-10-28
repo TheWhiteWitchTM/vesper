@@ -31,7 +31,12 @@ private:
     void finishShuffle();
     void playVideos(const QList<YtVideo> &videos, int index);
     void rememberChannel(const QString &id, const QString &name);
+    void replaceChannelId(const QString &from, const QString &id, const QString &name);
     void reloadChannels();
+    void setChannelBusy(const QString &id);
+    void toggleChannelCheck(const QString &id, bool on);
+    bool channelChecked(const QString &id) const;
+    QList<QPair<QString, QString>> checkedChannels() const;
     void prefetchAhead();
     void setStatus(const QString &text);
     Track trackFor(const YtVideo &video) const;
@@ -54,6 +59,7 @@ private:
     int searchToken_ = 0;
     int openToken_ = 0;
     int addToken_ = 0;
+    QString pendingChannel_;
     int shuffleSerial_ = 0;
     int shuffleLeft_ = 0;
     int shufflePlayGeneration_ = -1;
@@ -61,4 +67,5 @@ private:
     QSet<int> shuffleTokens_;
     QList<YtVideo> shuffleBag_;
     QString shuffleError_;
+    QString busyChannel_;
 };

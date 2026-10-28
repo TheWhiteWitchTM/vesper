@@ -21,6 +21,7 @@ signals:
     void refetchRequested();
     void organizeRequested();
     void aboutRequested();
+    void closeRequested();
     void kidsChanged(bool on);
     void identifyRequested();
 

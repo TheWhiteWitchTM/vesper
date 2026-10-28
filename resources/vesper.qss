@@ -57,6 +57,32 @@ QWidget#playerGrip QToolButton#gripBtn:pressed {
     background: #4e2b0a;
 }
 
+QWidget#dockTools {
+    background: rgba(18, 14, 10, 235);
+    border: 1px solid #e4b15a;
+    border-radius: 16px;
+}
+
+QWidget#dockTools QToolButton#dockTool {
+    background: #e4b15a;
+    border: none;
+    border-radius: 12px;
+    padding: 0;
+    margin: 0;
+}
+
+QWidget#dockTools QToolButton#dockTool:hover {
+    background: #f0c57a;
+}
+
+QWidget#dockTools QToolButton#dockTool[dim="true"] {
+    background: #3a3228;
+}
+
+QWidget#dockTools QToolButton#dockTool[dim="true"]:hover {
+    background: #5c4c38;
+}
+
 QWidget#theater {
     background: #070605;
 }
@@ -102,6 +128,12 @@ QLabel#navSection {
     font-weight: 600;
     letter-spacing: 1px;
     padding: 12px 14px 4px 14px;
+}
+
+QFrame#volumePop {
+    background: #241e18;
+    border: 1px solid #4a4036;
+    border-radius: 10px;
 }
 
 QFrame#scanPop {
@@ -150,10 +182,42 @@ QMenuBar {
     border-bottom: 1px solid #2e2822;
     padding: 1px 6px;
     spacing: 2px;
+    min-height: 44px;
 }
 
-QWidget#menuTools {
+QWidget#menuTools, QWidget#menuBrand {
     background: transparent;
+}
+
+QToolButton#barBtn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+    margin: 0;
+}
+
+QToolButton#barBtn:hover {
+    background: #2e2822;
+}
+
+QToolButton#barBtn:checked {
+    background: #3a2e1c;
+}
+
+QToolButton#barBtn::menu-indicator {
+    image: none;
+    width: 0;
+}
+
+QFrame#detailCard {
+    background: #241e18;
+    border: 1px solid #4a4036;
+    border-radius: 12px;
+}
+
+QFrame#detailCard QLabel#muted {
+    font-size: 10.5pt;
 }
 
 QMenuBar::item {
@@ -323,14 +387,52 @@ QToolButton#playButton:hover {
     background: #f0c57a;
 }
 
+QToolButton#lcdPlay {
+    background: #e4b15a;
+    border: none;
+    border-radius: 13px;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+QToolButton#lcdPlay:hover {
+    background: #f0c57a;
+}
+
+QWidget#lcdPlayer QToolButton#transportBtn {
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+    border-radius: 13px;
+}
+
+QLabel#homeGreeting {
+    font-family: "Liberation Serif", "DejaVu Serif", serif;
+    font-size: 15pt;
+    color: #f6e7c8;
+    padding: 0;
+    margin: 0;
+}
+
+QLabel#homeCounts {
+    font-family: "Liberation Serif", "DejaVu Serif", serif;
+    font-size: 12pt;
+    color: #b7ab9a;
+    padding: 0;
+    margin: 0;
+}
+
 QToolButton#transportBtn {
     background: transparent;
     border: none;
     border-radius: 10px;
     padding: 0;
     margin: 0;
-    min-width: 0;
-    min-height: 0;
+    min-width: 32px;
+    min-height: 32px;
 }
 
 QToolButton#transportBtn:hover {

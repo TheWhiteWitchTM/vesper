@@ -34,6 +34,7 @@ SOURCES += \
     src/youtube.cpp \
     src/ui/trackmodel.cpp \
     src/ui/coverdelegate.cpp \
+    src/ui/lcdplayer.cpp \
     src/ui/transport.cpp \
     src/ui/homeview.cpp \
     src/ui/musicview.cpp \
@@ -67,6 +68,7 @@ HEADERS += \
     src/youtube.h \
     src/ui/trackmodel.h \
     src/ui/coverdelegate.h \
+    src/ui/lcdplayer.h \
     src/ui/transport.h \
     src/ui/homeview.h \
     src/ui/musicview.h \

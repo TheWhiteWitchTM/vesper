@@ -344,7 +344,12 @@ int main(int argc, char *argv[])
     if (parser.isSet(organizeCheck)) {
         const int organized = organizeSelfCheck();
         const int rules = rulesSelfCheck();
-        return organized != 0 ? organized : rules;
+        const int beside = mediaBesideSelfCheck();
+        if (organized != 0)
+            return organized;
+        if (rules != 0)
+            return rules;
+        return beside;
     }
     if (parser.isSet(selfTest))
         return runSelfTest(parser.value(selfTest));

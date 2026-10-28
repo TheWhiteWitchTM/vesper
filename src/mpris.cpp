@@ -1,5 +1,6 @@
 #include "mpris.h"
 
+#include "common.h"
 #include "player.h"
 
 #include <QDBusConnection>
@@ -19,12 +20,7 @@ QStringList MprisRoot::schemes() const
 
 QStringList MprisRoot::mimes() const
 {
-    return {
-        QStringLiteral("audio/mpeg"), QStringLiteral("audio/flac"), QStringLiteral("audio/ogg"),
-        QStringLiteral("audio/mp4"), QStringLiteral("audio/wav"), QStringLiteral("audio/x-vorbis+ogg"),
-        QStringLiteral("video/mp4"), QStringLiteral("video/x-matroska"), QStringLiteral("video/webm"),
-        QStringLiteral("video/x-msvideo"), QStringLiteral("video/quicktime")
-    };
+    return supportedMimeTypes();
 }
 
 void MprisRoot::Quit()

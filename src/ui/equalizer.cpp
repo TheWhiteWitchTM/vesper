@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
@@ -123,11 +124,23 @@ EqualizerDialog::EqualizerDialog(Player *player, Settings *settings, QWidget *pa
     buttons->addWidget(close);
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(22, 18, 22, 18);
+    layout->setContentsMargins(22, 10, 16, 18);
     layout->setSpacing(14);
+    auto *titleRow = new QHBoxLayout;
     auto *title = new QLabel(QStringLiteral("Equalizer"));
+    auto *dismiss = new QToolButton(this);
+    dismiss->setObjectName(QStringLiteral("barBtn"));
+    dismiss->setText(QStringLiteral("×"));
+    dismiss->setToolTip(QStringLiteral("Close"));
+    dismiss->setCursor(Qt::PointingHandCursor);
+    dismiss->setAutoRaise(true);
+    dismiss->setFixedSize(28, 28);
+    dismiss->setFocusPolicy(Qt::NoFocus);
+    titleRow->addWidget(title, 1);
+    titleRow->addWidget(dismiss);
+    connect(dismiss, &QToolButton::clicked, this, &QDialog::reject);
     title->setObjectName(QStringLiteral("section"));
-    layout->addWidget(title);
+    layout->addLayout(titleRow);
     layout->addLayout(top);
     layout->addLayout(preampRow);
     layout->addLayout(bandRow, 1);

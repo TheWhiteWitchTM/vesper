@@ -116,7 +116,9 @@ void MetadataService::begin(const Track &track)
     const QString who = track.displayArtist().isEmpty()
         ? track.displayTitle()
         : track.displayArtist() + QStringLiteral(" — ") + track.displayTitle();
-    emit statusChanged(QStringLiteral("Looking up %1").arg(who));
+    const QString file = QFileInfo(track.path).fileName();
+    emit statusChanged(file.isEmpty() ? QStringLiteral("Looking up %1").arg(who)
+                                      : QStringLiteral("Looking up %1\n%2").arg(who, file));
     step_ = Step::Sibling;
     runStep();
 }

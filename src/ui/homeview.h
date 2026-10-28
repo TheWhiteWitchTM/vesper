@@ -4,6 +4,8 @@
 
 #include <QWidget>
 
+class QLabel;
+class QScrollArea;
 class QVBoxLayout;
 
 class Library;
@@ -31,4 +33,7 @@ private:
     Library *library_ = nullptr;
     QVBoxLayout *content_ = nullptr;
     QWidget *contentWidget_ = nullptr;
+    QScrollArea *scroll_ = nullptr;
+    QLabel *greeting_ = nullptr;
+    qint64 scrollLockUntil_ = 0;
 };

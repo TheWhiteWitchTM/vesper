@@ -79,6 +79,7 @@ bool Scanner::startScan(const QList<Root> &roots,
         QMutexLocker lock(&progressMutex_);
         progress_ = {};
         progress_.percent = -1;
+        progress_.etaMs = -1;
     }
     start();
     return true;
@@ -111,13 +112,22 @@ void Scanner::noteProgress(int percent, int done, int total, const QString &file
     lastProgressMs_ = now;
     const QString file = filePath.isEmpty() ? QString() : QFileInfo(filePath).fileName();
     {
+        // Percent, remaining time, and the current file are sampled here, on
+        // the scan thread. The window only reads the snapshot.
         QMutexLocker lock(&progressMutex_);
         progress_.percent = percent;
         progress_.done = done;
         progress_.total = total;
         progress_.file = file;
+        progress_.path = filePath;
         if (percent >= 0 && progress_.startedMs == 0)
             progress_.startedMs = now;
+        progress_.etaMs = -1;
+        if (percent >= 0 && percent < 100 && progress_.startedMs > 0 && done > 0 && total > done) {
+            const qint64 elapsed = now - progress_.startedMs;
+            if (elapsed >= 1500)
+                progress_.etaMs = elapsed * qint64(total - done) / qint64(done);
+        }
     }
     QString detail;
     if (percent < 0)
