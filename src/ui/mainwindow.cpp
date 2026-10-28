@@ -388,8 +388,8 @@ private:
     std::function<void()> onDrop_;
 };
 
-// Two controls that sit on the picture while a list is open.
-// Hide tucks the picture away. Restore brings that same picture back.
+// One control on the picture while a list is open.
+// The same button hides the picture and brings it back.
 class DockTools : public QWidget {
 public:
     explicit DockTools(QWidget *parent = nullptr)
@@ -398,41 +398,30 @@ public:
         setObjectName(QStringLiteral("dockTools"));
         setAttribute(Qt::WA_StyledBackground, true);
         setCursor(Qt::ArrowCursor);
-        hideBtn_ = make(Icons::eyeOff(QColor(QStringLiteral("#1a140c"))), QStringLiteral("Hide the picture"));
-        restoreBtn_ = make(Icons::eye(QColor(QStringLiteral("#f3eee6"))), QStringLiteral("Restore the picture"));
+        toggle_ = make(Icons::eyeOff(QColor(QStringLiteral("#1a140c"))), QStringLiteral("Hide the picture"));
         auto *row = new QHBoxLayout(this);
         row->setContentsMargins(8, 8, 8, 8);
-        row->setSpacing(8);
-        row->addWidget(hideBtn_);
-        row->addWidget(restoreBtn_);
-        connect(hideBtn_, &QToolButton::clicked, this, [this] {
-            if (onHide_)
-                onHide_();
-        });
-        connect(restoreBtn_, &QToolButton::clicked, this, [this] {
-            if (onRestore_)
-                onRestore_();
+        row->setSpacing(0);
+        row->addWidget(toggle_);
+        connect(toggle_, &QToolButton::clicked, this, [this] {
+            if (onToggle_)
+                onToggle_();
         });
         setFolded(false);
     }
 
     void setFolded(bool on)
     {
-        const QColor hot(QStringLiteral("#1a140c"));
-        const QColor cool(QStringLiteral("#f3eee6"));
-        hideBtn_->setIcon(Icons::eyeOff(on ? cool : hot));
-        restoreBtn_->setIcon(Icons::eye(on ? hot : cool));
-        hideBtn_->setProperty("dim", on);
-        restoreBtn_->setProperty("dim", !on);
-        for (QToolButton *button : {hideBtn_, restoreBtn_}) {
-            button->style()->unpolish(button);
-            button->style()->polish(button);
-            button->update();
-        }
+        const QColor ink(QStringLiteral("#1a140c"));
+        toggle_->setIcon(on ? Icons::eye(ink) : Icons::eyeOff(ink));
+        toggle_->setToolTip(on ? QStringLiteral("Restore the picture") : QStringLiteral("Hide the picture"));
+        toggle_->setProperty("dim", false);
+        toggle_->style()->unpolish(toggle_);
+        toggle_->style()->polish(toggle_);
+        toggle_->update();
     }
 
-    void setHide(std::function<void()> fn) { onHide_ = std::move(fn); }
-    void setRestore(std::function<void()> fn) { onRestore_ = std::move(fn); }
+    void setToggle(std::function<void()> fn) { onToggle_ = std::move(fn); }
 
 private:
     static QToolButton *make(const QIcon &icon, const QString &tip)
@@ -449,10 +438,8 @@ private:
         return button;
     }
 
-    QToolButton *hideBtn_ = nullptr;
-    QToolButton *restoreBtn_ = nullptr;
-    std::function<void()> onHide_;
-    std::function<void()> onRestore_;
+    QToolButton *toggle_ = nullptr;
+    std::function<void()> onToggle_;
 };
 
 void setLabelText(QLabel *label, const QString &text)
@@ -1182,36 +1169,31 @@ void MainWindow::wire()
     chromeTimer_->setSingleShot(true);
     chromeTimer_->setInterval(1600);
     connect(chromeTimer_, &QTimer::timeout, this, [this] {
-        if (!fullscreen_ || player_->state() != Player::State::Playing)
+        if (!controlsAutohide())
             return;
-        if (QApplication::activePopupWidget()) {
+        // A menu or the resume bar is in use. Wait, then hide.
+        if (QApplication::activePopupWidget()
+            || (resumeBar_ && resumeBar_->isVisible() && resumeBar_->underMouse())) {
             chromeTimer_->start();
             return;
         }
-        const bool over = (sidebar_ && sidebar_->underMouse())
-            || (menuBar() && menuBar()->underMouse())
-            || (playerGrip_ && playerGrip_->underMouse())
-            || (transport_ && transport_->underMouse())
-            || (resumeBar_ && resumeBar_->isVisible() && resumeBar_->underMouse());
-        if (over) {
-            chromeTimer_->start();
-            return;
-        }
+        // The pointer can sit on the controls. Still means they hide.
         setChromeVisible(false);
     });
     chromePoll_ = new QTimer(this);
     chromePoll_->setInterval(160);
     connect(chromePoll_, &QTimer::timeout, this, [this] {
-        if (!fullscreen_)
+        if (!controlsAutohide())
             return;
         const QPoint pos = mapFromGlobal(QCursor::pos());
         if (!rect().contains(pos))
             return;
         const bool moved = pos != lastCursor_;
         lastCursor_ = pos;
+        // The right edge belongs to the queue. Movement anywhere else
+        // brings the controls back. A still pointer does not.
         const bool right = pos.x() >= width() - 32;
-        const bool edge = pos.y() < 48 || pos.y() > height() - 80 || pos.x() < 28;
-        if (!right && (moved || edge))
+        if (moved && !right)
             pokeChrome();
     });
 
@@ -1461,10 +1443,8 @@ void MainWindow::wire()
                              [this](int dy) { dragPlayer(dy); },
                              [this] { finishPlayerDrag(); });
     }
-    if (dockTools_) {
-        dockTools_->setHide([this] { setPlayerCollapsed(true); });
-        dockTools_->setRestore([this] { setPlayerCollapsed(false); });
-    }
+    if (dockTools_)
+        dockTools_->setToggle([this] { setPlayerCollapsed(!playerFolded_); });
     applyPlayerFold();
 
     connect(video_, &VideoWidget::clicked, this, [this] {
@@ -1536,12 +1516,12 @@ void MainWindow::wire()
                 setPlayerCollapsed(false);
         }
         placeVideo();
-        if (!fullscreen_)
-            return;
-        if (state == Player::State::Playing)
-            pokeChrome();
-        else
-            setChromeVisible(true);
+        if (fullscreen_ || (playerExpanded_ && !mini_)) {
+            if (state == Player::State::Playing)
+                pokeChrome();
+            else
+                setChromeVisible(true);
+        }
     });
     connect(player_, &Player::positionChanged, this, &MainWindow::rememberPlayback);
     connect(player_, &Player::seeked, this, [this] { resumeBar_->hide(); });
@@ -2502,15 +2482,29 @@ void MainWindow::setPlayerCollapsed(bool on)
     }
     if (on && mini_)
         setMini(false);
-    if (playerFolded_ == on) {
-        applyPlayerFold();
+    if (playerFolded_ != on) {
+        playerFolded_ = on;
+        dragSlack_ = 0;
+        if (settings_)
+            settings_->setPlayerFolded(on);
+    }
+    applyPlayerFold();
+    // Folding leaves the controls up. The large player hides them again
+    // once the picture is back and the mouse rests.
+    if (controlsAutohide()) {
+        lastCursor_ = mapFromGlobal(QCursor::pos());
+        if (chromePoll_)
+            chromePoll_->start();
+        if (chromeTimer_ && !chromeTimer_->isActive())
+            chromeTimer_->start();
         return;
     }
-    playerFolded_ = on;
-    dragSlack_ = 0;
-    if (settings_)
-        settings_->setPlayerFolded(on);
-    applyPlayerFold();
+    if (chromePoll_)
+        chromePoll_->stop();
+    if (chromeTimer_)
+        chromeTimer_->stop();
+    if (!chromeShown_ || (menuBar() && !menuBar()->isVisible()))
+        setChromeVisible(true);
 }
 
 void MainWindow::placeLcd()
@@ -2589,7 +2583,7 @@ void MainWindow::placeDockTools()
     const bool musicPiece = !track.path.isEmpty() && (!track.isVideo() || track.onMusicShelf());
     const int page = stack_ ? stack_->currentIndex() : -1;
     const bool theater = fullscreen_ || (!musicPiece && page == 7);
-    const bool show = !mini_ && !theater && playerInDock();
+    const bool show = !mini_ && !theater && playerInDock() && (fullscreen_ || !playerExpanded_ || chromeShown_);
     dockTools_->setVisible(show);
     if (!show)
         return;
@@ -2626,6 +2620,20 @@ void MainWindow::togglePlayerFill()
     }
     applyDockSize();
     placeVideo();
+    if (playerExpanded_) {
+        chromeShown_ = true;
+        lastCursor_ = mapFromGlobal(QCursor::pos());
+        if (chromePoll_)
+            chromePoll_->start();
+        if (chromeTimer_ && player_ && player_->state() == Player::State::Playing)
+            chromeTimer_->start();
+    } else if (!fullscreen_) {
+        if (chromePoll_)
+            chromePoll_->stop();
+        if (chromeTimer_)
+            chromeTimer_->stop();
+        setChromeVisible(true);
+    }
 }
 
 void MainWindow::applyDockSize()
@@ -2832,10 +2840,17 @@ void MainWindow::setFullscreen(bool on, bool user)
         fsAdjust_ = false;
         return;
     }
-    if (chromePoll_)
-        chromePoll_->stop();
-    if (chromeTimer_)
-        chromeTimer_->stop();
+    if (!playerExpanded_) {
+        if (chromePoll_)
+            chromePoll_->stop();
+        if (chromeTimer_)
+            chromeTimer_->stop();
+    } else if (player_ && player_->state() == Player::State::Playing) {
+        if (chromePoll_)
+            chromePoll_->start();
+        if (chromeTimer_)
+            chromeTimer_->start();
+    }
     exclusive_ = false;
     softBeforeReal_ = false;
     leaveSoftScreen();
@@ -3016,15 +3031,35 @@ void MainWindow::fitMiniWindow()
         resize(width() > 900 ? 680 : qMax(520, width()), bar);
 }
 
+bool MainWindow::controlsAutohide() const
+{
+    if (mini_ || playerFolded_ || !player_)
+        return false;
+    if (player_->state() != Player::State::Playing)
+        return false;
+    // Full screen, and the large page-filling player. A still mouse hides
+    // the controls. Moving it brings them back.
+    return fullscreen_ || playerExpanded_;
+}
+
 void MainWindow::setChromeVisible(bool on)
 {
-    if (!fullscreen_) {
+    const bool large = playerExpanded_ && !mini_ && !fullscreen_;
+    if (!fullscreen_ && !large) {
+        const bool menuHidden = menuBar() && !menuBar()->isVisible() && !mini_;
         chromeShown_ = true;
+        if (menuHidden)
+            menuBar()->show();
+        if (menuHidden || !on)
+            placeLcd();
+        placeDockTools();
         return;
     }
     chromeShown_ = on;
-    if (sidebar_)
-        sidebar_->hide();
+    if (fullscreen_) {
+        if (sidebar_)
+            sidebar_->hide();
+    }
     if (menuBar())
         menuBar()->setVisible(on);
     if (transport_)
@@ -3032,10 +3067,18 @@ void MainWindow::setChromeVisible(bool on)
     if (playerGrip_)
         playerGrip_->hide();
     placeLcd();
+    if (large) {
+        if (QLayout *windowLayout = layout())
+            windowLayout->activate();
+        applyDockSize();
+    }
+    placeDockTools();
     if (!on && resumeBar_)
         resumeBar_->hide();
     if (!on && !scanPinned_ && scanPop_ && scanPop_->frame)
         scanPop_->frame->hide();
+    if (!fullscreen_)
+        return;
     const bool railOpen = playRail_ && playRail_->isVisible();
     if (on || railOpen) {
         unsetCursor();
@@ -3050,12 +3093,12 @@ void MainWindow::setChromeVisible(bool on)
 
 void MainWindow::pokeChrome()
 {
-    if (!fullscreen_)
+    if (!controlsAutohide())
         return;
     setChromeVisible(true);
     if (player_->state() == Player::State::Playing)
         chromeTimer_->start();
-    else
+    else if (chromeTimer_)
         chromeTimer_->stop();
 }
 
@@ -3916,11 +3959,13 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     }
     if (event->type() == QEvent::MouseMove || event->type() == QEvent::HoverMove) {
         checkHoverRail();
-        if (fullscreen_) {
+        if (controlsAutohide()) {
             const QPoint pos = mapFromGlobal(QCursor::pos());
             const bool inside = rect().contains(pos);
             const bool right = inside && pos.x() >= width() - 40;
-            if (inside && !right)
+            const bool moved = pos != lastCursor_;
+            lastCursor_ = pos;
+            if (inside && !right && moved)
                 pokeChrome();
         }
     }

@@ -96,6 +96,7 @@ private:
     void dragPlayer(int dy);
     void finishPlayerDrag();
     int dockCap() const;
+    bool controlsAutohide() const;
     void setChromeVisible(bool on);
     void pokeChrome();
     void showAbout();
