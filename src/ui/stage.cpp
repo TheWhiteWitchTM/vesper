@@ -9,6 +9,7 @@
 #include <QPaintEvent>
 #include <QProcess>
 #include <QShowEvent>
+#include <QSizePolicy>
 #include <QTimer>
 
 #include <algorithm>
@@ -185,6 +186,8 @@ WitchStage::WitchStage(Player *player, QWidget *parent)
 {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setAutoFillBackground(false);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setMinimumSize(160, 140);
     for (int i = 1; i <= 12; ++i) {
         const QPixmap frame(QStringLiteral(":/witch/%1.png").arg(i));
         if (!frame.isNull())
@@ -322,7 +325,9 @@ void WitchStage::paintEvent(QPaintEvent *)
     const int gap = qMax(3, barW / 2);
     const int total = kBands * barW + (kBands - 1) * gap;
     int x = (width() - total) / 2;
-    const int floor = height() - 14;
+    // Stay clear of the bottom edge. A panel that overlaps the window
+    // used to cover the bars while the witch sat above them.
+    const int floor = height() - 22;
     const int maxH = qMax(12, int(height() * 0.36));
     painter.setPen(Qt::NoPen);
     for (int i = 0; i < kBands; ++i) {

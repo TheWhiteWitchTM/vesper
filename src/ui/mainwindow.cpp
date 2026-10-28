@@ -85,6 +85,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QShortcut>
 #include <QSizePolicy>
 #include <QSpinBox>
@@ -645,7 +646,9 @@ MainWindow::MainWindow(const QStringList &paths, QWidget *parent)
     setWindowTitle(QStringLiteral("Vesper"));
     setWindowIcon(Icons::app());
     resize(1180, 760);
-    setMinimumSize(960, 640);
+    // A short screen cannot hold 640. The real minimum is set once the
+    // screen is known, and it always leaves room for the witch.
+    setMinimumSize(720, 420);
     setAcceptDrops(true);
     setMouseTracking(true);
 
@@ -1463,6 +1466,10 @@ void MainWindow::wire()
     connect(video_, &VideoWidget::frameReady, this, [this] {
         if (video_ && video_->hasFrame())
             setPlayerBusy(false);
+        // The first real frame can be taller or wider than 16:9.
+        // Fit the half dock to that shape once, then leave it.
+        if (filmInMini())
+            applyDockSize();
     });
     connect(player_, &Player::trackChanged, youtube_, &YoutubeView::notePlayback);
     connect(player_, &Player::trackMetaChanged, this, [this](const Track &track) {
@@ -1709,6 +1716,10 @@ void MainWindow::showPage(int page)
     // The old Now playing page is gone from the chrome. The player shows that.
     if (page == 5)
         page = 0;
+    // A page-filling picture steps down to half when a list is opened.
+    // Half stays half — hidden or shown — until the display is clicked for large.
+    if (page != 7)
+        shrinkPlayerToHalf();
     if (fullscreen_ && page != 7)
         setFullscreen(false, true);
     if (page <= 6)
@@ -1752,16 +1763,25 @@ void MainWindow::placeVideo()
     applyDockSize();
     const Track track = player_ ? player_->current() : Track{};
     const bool musicPiece = !track.path.isEmpty() && (!track.isVideo() || track.onMusicShelf());
-    const bool audioStage = !mini_ && dockStage_ && player_ && !player_->hasVideo() && musicPiece
-        && (player_->state() == Player::State::Playing || player_->state() == Player::State::Paused);
+    const bool audioPiece = !track.path.isEmpty() && !track.isVideo();
+    const bool playing = player_ && (player_->state() == Player::State::Playing
+                                     || player_->state() == Player::State::Paused);
+    // A song or a station keeps the witch on every size: half, large, mini,
+    // and full screen. A stray picture from the file must not replace her.
+    const bool audioStage = dockStage_ && playing && audioPiece;
     // Page 7 is the big picture. Music, including a music video, stays in the
     // dock unless this window was put in full screen on purpose. A film that
     // is still opening shows the same dock, with a spinner, until the picture starts.
-    const bool opening = playerBusy_ && player_;
+    const bool opening = playerBusy_ && player_ && !audioPiece;
     const bool theater = fullscreen_ || (!musicPiece && stack_ && stack_->currentIndex() == 7);
     // A folded picture stays out of the way while a list is open. Playback does not stop.
     const bool foldDock = !theater && playerFolded_ && playerInDock();
-    if (theater) {
+    if (theater && audioStage) {
+        theaterLayout_->addWidget(dockStage_, 1);
+        video_->hide();
+        dockStage_->show();
+        miniDock_->hide();
+    } else if (theater) {
         theaterLayout_->addWidget(video_);
         if (dockStage_)
             dockStage_->hide();
@@ -1772,7 +1792,7 @@ void MainWindow::placeVideo()
             dockStage_->hide();
         video_->hide();
         miniDock_->hide();
-    } else if (player_ && (player_->hasVideo() || opening)) {
+    } else if (player_ && !audioPiece && (player_->hasVideo() || opening)) {
         dockLayout_->addWidget(video_);
         if (dockStage_)
             dockStage_->hide();
@@ -1780,7 +1800,7 @@ void MainWindow::placeVideo()
         video_->show();
     } else if (audioStage) {
         video_->hide();
-        dockLayout_->addWidget(dockStage_);
+        dockLayout_->addWidget(dockStage_, 1);
         dockStage_->show();
         miniDock_->show();
     } else {
@@ -1789,6 +1809,7 @@ void MainWindow::placeVideo()
         miniDock_->hide();
         video_->hide();
     }
+    liftStageAbovePanel();
     if (video_)
         video_->setBusy(playerBusy_ && !video_->hasFrame());
     if (mini_)
@@ -2569,10 +2590,11 @@ bool MainWindow::playerInDock() const
     if (mini_ || !player_)
         return false;
     const Track track = player_->current();
-    const bool musicPiece = !track.path.isEmpty() && (!track.isVideo() || track.onMusicShelf());
-    const bool audioStage = dockStage_ && !player_->hasVideo() && musicPiece
+    const bool audioPiece = !track.path.isEmpty() && !track.isVideo()
         && (player_->state() == Player::State::Playing || player_->state() == Player::State::Paused);
-    return player_->hasVideo() || playerBusy_ || audioStage;
+    if (audioPiece)
+        return true;
+    return player_->hasVideo() || playerBusy_;
 }
 
 void MainWindow::placeDockTools()
@@ -2606,6 +2628,27 @@ void MainWindow::placeDockTools()
     }
     dockTools_->move(qMax(margin, x), qMax(margin, y));
     dockTools_->raise();
+}
+
+void MainWindow::shrinkPlayerToHalf()
+{
+    if (!playerExpanded_ || mini_)
+        return;
+    playerExpanded_ = false;
+    if (fullscreen_)
+        return;
+    if (chromePoll_)
+        chromePoll_->stop();
+    if (chromeTimer_)
+        chromeTimer_->stop();
+    if (!chromeShown_ || (menuBar() && !menuBar()->isVisible()))
+        setChromeVisible(true);
+    else
+        syncNavChrome();
+    if (QLayout *windowLayout = layout())
+        windowLayout->activate();
+    applyDockSize();
+    placeVideo();
 }
 
 void MainWindow::togglePlayerFill()
@@ -2645,9 +2688,77 @@ void MainWindow::applyDockSize()
     if (!mini_ && playerExpanded_)
         h = filledDockHeight();
     else if (filmInMini())
-        h = qBound(96, qMax(compact, filmMiniHeight()), dockCap());
+        h = filmMiniHeight();
+    else if (!mini_) {
+        // The menu stays, and a strip of the library stays. The witch and
+        // her bars stay inside the window instead of sliding under the panel.
+        const int menu = menuBar() && menuBar()->isVisible() ? menuBar()->height() : 0;
+        const int room = qMax(160, height() - menu - 160);
+        h = qBound(160, qMin(h, room), room);
+    }
     if (miniDock_->height() != h)
         miniDock_->setFixedHeight(h);
+}
+
+void MainWindow::clampToScreen()
+{
+    if (fullscreen_ || exclusive_ || fittingScreen_)
+        return;
+    QScreen *screen = this->screen();
+    if (!screen)
+        return;
+    const QRect avail = screen->availableGeometry();
+    if (avail.width() < 320 || avail.height() < 240)
+        return;
+    fittingScreen_ = true;
+    if (!mini_) {
+        const int minW = qMin(960, avail.width());
+        const int minH = qMin(640, avail.height());
+        if (minimumWidth() != minW || minimumHeight() != minH)
+            setMinimumSize(minW, minH);
+    }
+    QRect geo = geometry();
+    if (geo.width() > avail.width())
+        geo.setWidth(avail.width());
+    if (geo.height() > avail.height())
+        geo.setHeight(avail.height());
+    if (geo.left() < avail.left())
+        geo.moveLeft(avail.left());
+    if (geo.top() < avail.top())
+        geo.moveTop(avail.top());
+    if (geo.right() > avail.right())
+        geo.moveRight(avail.right());
+    if (geo.bottom() > avail.bottom())
+        geo.moveBottom(avail.bottom());
+    if (geo != geometry())
+        setGeometry(geo);
+    fittingScreen_ = false;
+}
+
+void MainWindow::liftStageAbovePanel()
+{
+    int overlap = 0;
+    if (!exclusive_) {
+        if (QScreen *screen = this->screen())
+            overlap = qMax(0, frameGeometry().bottom() - screen->availableGeometry().bottom());
+    }
+    auto lift = [](QLayout *layout, int margin, int hostHeight) {
+        if (!layout)
+            return;
+        const int room = qMax(0, hostHeight - 160);
+        const int bottom = qMin(margin, room);
+        const QMargins now = layout->contentsMargins();
+        if (now.bottom() == bottom && now.left() == 0 && now.top() == 0 && now.right() == 0)
+            return;
+        layout->setContentsMargins(0, 0, 0, bottom);
+    };
+    const bool stageInTheater = dockStage_ && dockStage_->isVisible()
+        && theaterLayout_ && dockStage_->parentWidget() && theaterLayout_->parentWidget()
+        && dockStage_->parentWidget() == theaterLayout_->parentWidget();
+    lift(dockLayout_, miniDock_ && miniDock_->isVisible() ? overlap : 0,
+         miniDock_ ? miniDock_->height() : 0);
+    lift(theaterLayout_, stageInTheater ? overlap : 0,
+         theaterLayout_ && theaterLayout_->parentWidget() ? theaterLayout_->parentWidget()->height() : 0);
 }
 
 bool MainWindow::filmInMini() const
@@ -2662,9 +2773,19 @@ bool MainWindow::filmInMini() const
 
 int MainWindow::filmMiniHeight() const
 {
-    // Wide enough to watch, short enough that the library stays on screen.
+    // Half the page, in the picture's own shape. The old short strip
+    // (width × 9/32, never taller than 340) cropped a 16:9 film.
     const int wide = column_ ? qMax(320, column_->width()) : 960;
-    return qBound(220, wide * 9 / 32, 340);
+    QSize frame(16, 9);
+    if (video_) {
+        const QSize shot = video_->frameSize();
+        if (shot.width() > 8 && shot.height() > 8)
+            frame = shot;
+    }
+    const int natural = qMax(180, int((qint64(wide) * frame.height()) / qMax(1, frame.width())));
+    const int columnH = (column_ && column_->height() > 80) ? column_->height() : qMax(480, height() - 48);
+    const int room = qMax(180, columnH - 220);
+    return qBound(180, qMin(natural, room), room);
 }
 
 int MainWindow::filledDockHeight() const
@@ -2771,7 +2892,6 @@ void MainWindow::setMini(bool on)
         setMinimumSize(520, 112);
     } else {
         setMaximumHeight(QWIDGETSIZE_MAX);
-        setMinimumSize(960, 640);
         sidebar_->show();
         if (menuBar())
             menuBar()->show();
@@ -2780,8 +2900,11 @@ void MainWindow::setMini(bool on)
             banner_->show();
         if (!normalGeo_.isEmpty())
             restoreGeometry(normalGeo_);
+        clampToScreen();
     }
     applyPlayerFold();
+    if (!on)
+        syncNavChrome();
 }
 
 void MainWindow::setFullscreen(bool on, bool user)
@@ -2884,6 +3007,8 @@ void MainWindow::setFullscreen(bool on, bool user)
     if (!videoSurface())
         hidePlayRail();
     applyPlayerFold();
+    if (!mini_)
+        syncNavChrome();
     if (playerGrip_)
         playerGrip_->hide();
     if (stack_)
@@ -3003,10 +3128,13 @@ void MainWindow::fitMiniWindow()
     // window is not saved as the mini size.
     if (menuBar() && menuBar()->isVisible())
         return;
-    const bool picture = player_ && player_->hasVideo();
+    const Track track = player_ ? player_->current() : Track{};
+    const bool audioPiece = player_ && !track.path.isEmpty() && !track.isVideo()
+        && (player_->state() == Player::State::Playing || player_->state() == Player::State::Paused);
+    const bool picture = player_ && !audioPiece && (player_->hasVideo() || playerBusy_);
     if (playerGrip_)
         playerGrip_->hide();
-    if (!picture) {
+    if (!picture && !audioPiece) {
         if (dockStage_)
             dockStage_->hide();
         if (miniDock_)
@@ -3015,14 +3143,16 @@ void MainWindow::fitMiniWindow()
             video_->hide();
     }
     const int bar = lcd_ ? qMax(40, lcd_->height()) : 44;
-    const int grip = 0;
-    const int pictureH = (picture && miniDock_ && miniDock_->isVisible()) ? miniDock_->height() : 0;
-    if (picture) {
+    if (picture || audioPiece) {
         setMaximumHeight(QWIDGETSIZE_MAX);
         setMinimumSize(520, 220);
-        const int want = bar + grip + qMax(pictureH, qBound(140, dockHeight_, 520));
+        const int stageH = audioPiece ? qBound(180, dockHeight_, 320) : qBound(140, dockHeight_, 520);
+        if (miniDock_)
+            miniDock_->setFixedHeight(stageH);
+        const int want = bar + stageH;
         if (width() > 900 || height() < want || width() < 520)
             resize(width() > 900 ? 720 : qMax(520, width()), qMax(height(), want));
+        clampToScreen();
         return;
     }
     setMinimumSize(520, bar);
@@ -3042,6 +3172,70 @@ bool MainWindow::controlsAutohide() const
     return fullscreen_ || playerExpanded_;
 }
 
+void MainWindow::syncNavChrome()
+{
+    if (!sidebar_ || mini_)
+        return;
+    static bool busy = false;
+    if (busy)
+        return;
+    busy = true;
+    struct Unlock {
+        bool &flag;
+        ~Unlock() { flag = false; }
+    } unlock{busy};
+    // Full screen keeps the nav out. The large player collapses it with the
+    // top bar. hide() does not clear the nav's rectangle, and the column is
+    // then laid out across that same space. The next pointer move shows the
+    // top player while the nav stays painted underneath.
+    const bool showSide = !fullscreen_ && (!playerExpanded_ || chromeShown_);
+    QWidget *host = sidebar_->parentWidget();
+    auto relayout = [host] {
+        if (!host || !host->layout())
+            return;
+        host->layout()->invalidate();
+        host->layout()->activate();
+    };
+    if (!showSide) {
+        if (fullscreen_) {
+            if (!sidebar_->isHidden()) {
+                sidebar_->hide();
+                relayout();
+            }
+            return;
+        }
+        if (sidebar_->isHidden())
+            sidebar_->setVisible(true);
+        if (sidebar_->maximumWidth() != 0 || sidebar_->width() > 0) {
+            sidebar_->setFixedWidth(0);
+            relayout();
+        }
+        return;
+    }
+    if (sidebar_->isHidden())
+        sidebar_->setVisible(true);
+    if (sidebar_->maximumWidth() != 208 || sidebar_->minimumWidth() != 208)
+        sidebar_->setFixedWidth(208);
+    const bool covered = column_ && column_->x() < 180;
+    const bool narrow = sidebar_->width() < 180;
+    if (!covered && !narrow)
+        return;
+    relayout();
+    if (!host)
+        return;
+    if (sidebar_->width() >= 180 && (!column_ || column_->x() >= 180))
+        return;
+    const int h = qMax(1, host->height());
+    sidebar_->setGeometry(0, 0, 208, h);
+    if (column_)
+        column_->setGeometry(208, 0, qMax(0, host->width() - 208), h);
+    sidebar_->raise();
+    if (playRail_ && playRail_->isVisible())
+        playRail_->raise();
+    if (scanPop_ && scanPop_->frame && scanPop_->frame->isVisible())
+        scanPop_->frame->raise();
+}
+
 void MainWindow::setChromeVisible(bool on)
 {
     const bool large = playerExpanded_ && !mini_ && !fullscreen_;
@@ -3050,16 +3244,15 @@ void MainWindow::setChromeVisible(bool on)
         chromeShown_ = true;
         if (menuHidden)
             menuBar()->show();
+        // The large player may have collapsed the nav. Put it back with the
+        // menu, even when this call is for a half-size player.
+        syncNavChrome();
         if (menuHidden || !on)
             placeLcd();
         placeDockTools();
         return;
     }
     chromeShown_ = on;
-    if (fullscreen_) {
-        if (sidebar_)
-            sidebar_->hide();
-    }
     if (menuBar())
         menuBar()->setVisible(on);
     if (transport_)
@@ -3072,6 +3265,9 @@ void MainWindow::setChromeVisible(bool on)
             windowLayout->activate();
         applyDockSize();
     }
+    // After the menu bar changes the central widget's height. Doing this
+    // earlier lets that resize lay the row out while the nav width is stale.
+    syncNavChrome();
     placeDockTools();
     if (!on && resumeBar_)
         resumeBar_->hide();
@@ -3898,9 +4094,18 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QMainWindow::closeEvent(event);
 }
 
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    clampToScreen();
+    placeVideo();
+}
+
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
+    if (!fittingScreen_)
+        clampToScreen();
     placeLcd();
     if (playRail_ && playRail_->isVisible())
         placePlayRail();
@@ -3913,6 +4118,8 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         miniDock_->setFixedHeight(dockHeight_);
     }
     placeDockTools();
+    if (playerExpanded_ && !mini_ && !fullscreen_)
+        syncNavChrome();
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)

@@ -10,6 +10,7 @@ public:
     explicit VideoWidget(QWidget *parent = nullptr);
 
     QImage currentFrame() const;
+    QSize frameSize() const;
     bool hasFrame() const;
     void clearFrame();
     void setBusy(bool on);

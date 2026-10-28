@@ -57,6 +57,7 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void changeEvent(QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -90,7 +91,10 @@ private:
     bool playerInDock() const;
     void setPlayerCollapsed(bool on);
     void togglePlayerFill();
+    void shrinkPlayerToHalf();
     void applyDockSize();
+    void clampToScreen();
+    void liftStageAbovePanel();
     int filledDockHeight() const;
     void applyPlayerFold();
     void dragPlayer(int dy);
@@ -98,6 +102,7 @@ private:
     int dockCap() const;
     bool controlsAutohide() const;
     void setChromeVisible(bool on);
+    void syncNavChrome();
     void pokeChrome();
     void showAbout();
     void showHelp();
@@ -217,6 +222,7 @@ private:
     int pageBeforeSettings_ = 0;
     int pageBeforeFs_ = 0;
     bool fullscreen_ = false;
+    bool fittingScreen_ = false;
     bool exclusive_ = false;
     bool softBeforeReal_ = false;
     bool fsAdjust_ = false;

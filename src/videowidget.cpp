@@ -24,6 +24,12 @@ QImage VideoWidget::currentFrame() const
     return frame_;
 }
 
+QSize VideoWidget::frameSize() const
+{
+    QMutexLocker lock(&mutex_);
+    return frame_.isNull() ? QSize() : frame_.size();
+}
+
 bool VideoWidget::hasFrame() const
 {
     QMutexLocker lock(&mutex_);
