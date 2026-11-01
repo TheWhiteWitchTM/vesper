@@ -1,5 +1,6 @@
 #include "ui/videoview.h"
 
+#include "icons.h"
 #include "library.h"
 #include "ui/coverdelegate.h"
 #include "ui/trackmodel.h"
@@ -119,18 +120,16 @@ VideoView::VideoView(Library *library, QWidget *parent)
     : QWidget(parent)
     , library_(library)
 {
-    moviesButton_ = new QPushButton(QStringLiteral("Movies"));
-    showsButton_ = new QPushButton(QStringLiteral("Shows"));
-    allButton_ = new QPushButton(QStringLiteral("All"));
-    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
-    for (QPushButton *button : {moviesButton_, showsButton_, allButton_, shuffle}) {
-        button->setObjectName(QStringLiteral("modeBtn"));
-        button->setCursor(Qt::PointingHandCursor);
-        button->setFixedHeight(28);
-    }
-    for (QPushButton *button : {moviesButton_, showsButton_, allButton_})
+    moviesButton_ = Icons::iconButton(Icons::video(), QStringLiteral("Movies"), this);
+    showsButton_ = Icons::iconButton(Icons::shows(), QStringLiteral("Shows"), this);
+    allButton_ = Icons::iconButton(Icons::collection(), QStringLiteral("All"), this);
+    auto *shuffle = Icons::iconButton(Icons::shuffle(), QStringLiteral("Shuffle"), this);
+    coversButton_ = Icons::iconButton(Icons::grid(), QStringLiteral("Covers"), this);
+    listButton_ = Icons::iconButton(Icons::rows(), QStringLiteral("List"), this);
+    for (QPushButton *button : {moviesButton_, showsButton_, allButton_, coversButton_, listButton_})
         button->setCheckable(true);
     moviesButton_->setChecked(true);
+    coversButton_->setChecked(true);
     auto *modes = new QHBoxLayout;
     modes->setContentsMargins(0, 0, 0, 0);
     modes->setSpacing(4);
@@ -138,8 +137,12 @@ VideoView::VideoView(Library *library, QWidget *parent)
     modes->addWidget(showsButton_);
     modes->addWidget(allButton_);
     modes->addStretch();
+    modes->addWidget(coversButton_);
+    modes->addWidget(listButton_);
     modes->addWidget(shuffle);
-    heading_ = new QLabel(QStringLiteral("Movies. Search still finds the artist and genre."));
+    modes->addWidget(Icons::helpButton(QStringLiteral(
+        "A Series folder, a season folder, or an S01E02 name files a show.")));
+    heading_ = new QLabel;
     heading_->setObjectName(QStringLiteral("hint"));
 
     posters_ = new VideoPosterModel(this);
@@ -202,6 +205,18 @@ VideoView::VideoView(Library *library, QWidget *parent)
     connect(showsButton_, &QPushButton::clicked, this, [this] { applyMode(1); });
     connect(allButton_, &QPushButton::clicked, this, [this] { applyMode(2); });
     connect(shuffle, &QPushButton::clicked, this, &VideoView::shuffleRequested);
+    connect(coversButton_, &QPushButton::clicked, this, [this] {
+        covers_ = true;
+        applyShape();
+        if (cacheReady_)
+            present();
+    });
+    connect(listButton_, &QPushButton::clicked, this, [this] {
+        covers_ = false;
+        applyShape();
+        if (cacheReady_)
+            present();
+    });
     connect(shows_, &QTableWidget::cellClicked, this, [this](int row, int) {
         QTableWidgetItem *item = shows_->item(row, 0);
         if (item)
@@ -370,6 +385,13 @@ void VideoView::requestLoad()
     // The song list reads through the open library. A second connection used
     // to come back with nothing while that one was busy, so this page stayed blank.
     QList<Track> tracks = library_->tracks(QStringLiteral("video"));
+    QList<Track> local;
+    local.reserve(tracks.size());
+    for (const Track &track : tracks) {
+        if (!isStreamUrl(track.path))
+            local.append(track);
+    }
+    tracks.swap(local);
     for (Track &track : tracks) {
         const SeriesHint hint = seriesHint(track);
         if (track.showName.trimmed().isEmpty())
@@ -464,8 +486,8 @@ void VideoView::present()
         shows_->setSortingEnabled(true);
         shows_->sortByColumn(0, Qt::AscendingOrder);
         heading_->setText(rows.isEmpty()
-                              ? QStringLiteral("No shows yet. A Series folder, a season folder, or an S01E02 name files one.")
-                              : QStringLiteral("%1 shows. Open one for its episodes.").arg(rows.size()));
+                              ? QStringLiteral("No shows yet.")
+                              : QStringLiteral("%1 shows").arg(rows.size()));
         stack_->setCurrentWidget(shows_);
         return;
     }
@@ -525,12 +547,22 @@ void VideoView::present()
     table_->verticalScrollBar()->setValue(scroll);
     table_->setUpdatesEnabled(true);
     fitColumns();
-    if (mode_ == 0) {
+    if (covers_ && mode_ != 1) {
         const int gridScroll = grid_->verticalScrollBar()->value();
         posters_->setTracks(shown);
         grid_->verticalScrollBar()->setValue(gridScroll);
         stack_->setCurrentWidget(grid_);
+        applyShape();
         return;
     }
     stack_->setCurrentWidget(table_);
+    applyShape();
+}
+
+void VideoView::applyShape()
+{
+    if (coversButton_)
+        coversButton_->setChecked(covers_);
+    if (listButton_)
+        listButton_->setChecked(!covers_);
 }

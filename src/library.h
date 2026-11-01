@@ -49,6 +49,8 @@ public:
 
     Track trackById(qint64 id) const;
     Track trackByPath(const QString &path) const;
+    // A YouTube video already stored, or the same title and artist.
+    Track youtubeDouble(const QString &videoId, const QString &title, const QString &artist) const;
     QString albumArtwork(const QString &albumArtist, const QString &album) const;
 
     void updateProbe(qint64 id, qint64 durationMs, int width, int height);

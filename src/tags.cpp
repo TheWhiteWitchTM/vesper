@@ -1,5 +1,7 @@
 #include "tags.h"
 
+#include "idhunt.h"
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -254,6 +256,7 @@ Track readTrackTags(const QString &path, const QString &artworkDirectory)
             : QStringLiteral("video|%1").arg(track.path);
         track.artwork = saveArt(art, key, artworkDirectory);
     }
+    fillLocalIdentity(track);
     return track;
 }
 

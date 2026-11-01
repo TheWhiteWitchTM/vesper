@@ -422,11 +422,22 @@ QString artworkDir()
     return dataDir() + QStringLiteral("/artwork");
 }
 
+static QStringList vlcPluginNameFilters()
+{
+#if defined(Q_OS_WIN)
+    return {QStringLiteral("*.dll")};
+#elif defined(Q_OS_MACOS)
+    return {QStringLiteral("*.dylib")};
+#else
+    return {QStringLiteral("*.so")};
+#endif
+}
+
 static bool dirHasPlugins(const QString &dir)
 {
     if (dir.isEmpty() || !QDir(dir).exists())
         return false;
-    QDirIterator it(dir, {QStringLiteral("*.so")}, QDir::Files, QDirIterator::Subdirectories);
+    QDirIterator it(dir, vlcPluginNameFilters(), QDir::Files, QDirIterator::Subdirectories);
     return it.hasNext();
 }
 
@@ -435,7 +446,7 @@ int countPluginModules(const QString &pluginDir)
     if (pluginDir.isEmpty())
         return 0;
     int n = 0;
-    QDirIterator it(pluginDir, {QStringLiteral("*.so")}, QDir::Files, QDirIterator::Subdirectories);
+    QDirIterator it(pluginDir, vlcPluginNameFilters(), QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         it.next();
         ++n;
@@ -1079,6 +1090,8 @@ QString trackShelf(const QString &path, const QString &kind, const QString &fold
 
 void applyLibraryPlacement(Track &track, const QString &folderRole, const QString &folderPath)
 {
+    if (isStreamUrl(track.path))
+        return;
     const bool video = track.isVideo() || isVideoExt(QFileInfo(track.path).suffix());
     track.shelf = video ? trackShelf(track.path, QStringLiteral("video"), folderRole) : QString();
     if (track.shelf == QLatin1String("music")) {

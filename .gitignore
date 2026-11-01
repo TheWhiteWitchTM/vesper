@@ -1,5 +1,7 @@
 build/
+build-*/
 dist/
+release/
 third_party/
 *.o
 moc_*

@@ -1,5 +1,7 @@
 #include "ui/organizedialog.h"
 
+#include "icons.h"
+
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QFileDialog>
@@ -30,12 +32,6 @@ OrganizeDialog::OrganizeDialog(const QString &startDir, QWidget *parent)
     folderRow->addWidget(browse);
 
     tidy_ = new QCheckBox(QStringLiteral("Also sort files that already have a readable name"));
-    auto *help = new QLabel(QStringLiteral(
-        "Hashes and random ids are renamed when the file has a title, a sidecar, or a release name. "
-        "Scene names such as Movie.Name.2001.1080p go under Movies, shows under Shows, and tagged music "
-        "under Music / Artist / Album. A hash with nothing inside it stays put. Nothing is deleted."));
-    help->setWordWrap(true);
-    help->setObjectName(QStringLiteral("muted"));
 
     table_ = new QTableWidget(0, 4);
     table_->setHorizontalHeaderLabels({QStringLiteral("Rename"), QStringLiteral("Now"), QStringLiteral("Proposed"),
@@ -70,18 +66,22 @@ OrganizeDialog::OrganizeDialog(const QString &startDir, QWidget *parent)
     heading->setObjectName(QStringLiteral("section"));
     auto *dismiss = new QToolButton(this);
     dismiss->setObjectName(QStringLiteral("barBtn"));
-    dismiss->setText(QStringLiteral("×"));
+    dismiss->setIcon(Icons::dismiss());
+    dismiss->setIconSize(QSize(14, 14));
     dismiss->setToolTip(QStringLiteral("Close"));
     dismiss->setCursor(Qt::PointingHandCursor);
     dismiss->setAutoRaise(true);
     dismiss->setFixedSize(28, 28);
     dismiss->setFocusPolicy(Qt::NoFocus);
     titleRow->addWidget(heading, 1);
+    titleRow->addWidget(Icons::helpButton(QStringLiteral(
+        "Hashes and random ids are renamed when the file has a title, a sidecar, or a release name.\n"
+        "Scene names such as Movie.Name.2001.1080p go under Movies, shows under Shows, and tagged music "
+        "under Music / Artist / Album. A hash with nothing inside it stays put. Nothing is deleted."), this));
     titleRow->addWidget(dismiss);
     layout->addLayout(titleRow);
     layout->addLayout(folderRow);
     layout->addWidget(tidy_);
-    layout->addWidget(help);
     layout->addWidget(table_, 1);
     layout->addWidget(status_);
     layout->addLayout(buttons);

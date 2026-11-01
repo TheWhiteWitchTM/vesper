@@ -1,10 +1,12 @@
 #include "ui/musicview.h"
 
 #include "artloader.h"
+#include "icons.h"
 #include "library.h"
 #include "ui/coverdelegate.h"
 #include "ui/trackmodel.h"
 
+#include <QAbstractItemModel>
 #include <QComboBox>
 #include <QHeaderView>
 #include <QSignalBlocker>
@@ -117,19 +119,17 @@ MusicView::MusicView(Library *library, QWidget *parent)
     : QWidget(parent)
     , library_(library)
 {
-    auto *albumsButton = new QPushButton(QStringLiteral("Albums"));
-    auto *artistsButton = new QPushButton(QStringLiteral("Artists"));
-    auto *tracksButton = new QPushButton(QStringLiteral("Songs"));
-    auto *genresButton = new QPushButton(QStringLiteral("Genres"));
-    auto *shuffle = new QPushButton(QStringLiteral("Shuffle"));
-    for (QPushButton *button : {albumsButton, artistsButton, tracksButton, genresButton, shuffle}) {
-        button->setObjectName(QStringLiteral("modeBtn"));
-        button->setCursor(Qt::PointingHandCursor);
-        button->setFixedHeight(28);
-    }
-    for (QPushButton *button : {albumsButton, artistsButton, tracksButton, genresButton})
+    auto *albumsButton = Icons::iconButton(Icons::album(), QStringLiteral("Albums"), this);
+    auto *artistsButton = Icons::iconButton(Icons::person(), QStringLiteral("Artists"), this);
+    auto *tracksButton = Icons::iconButton(Icons::music(), QStringLiteral("Songs"), this);
+    auto *genresButton = Icons::iconButton(Icons::tag(), QStringLiteral("Genres"), this);
+    auto *shuffle = Icons::iconButton(Icons::shuffle(), QStringLiteral("Shuffle"), this);
+    coversButton_ = Icons::iconButton(Icons::grid(), QStringLiteral("Covers"), this);
+    listButton_ = Icons::iconButton(Icons::rows(), QStringLiteral("List"), this);
+    for (QPushButton *button : {albumsButton, artistsButton, tracksButton, genresButton, coversButton_, listButton_})
         button->setCheckable(true);
     albumsButton->setChecked(true);
+    coversButton_->setChecked(true);
     auto *modes = new QHBoxLayout;
     modes->setContentsMargins(0, 0, 0, 0);
     modes->setSpacing(4);
@@ -138,6 +138,8 @@ MusicView::MusicView(Library *library, QWidget *parent)
     modes->addWidget(tracksButton);
     modes->addWidget(genresButton);
     modes->addStretch();
+    modes->addWidget(coversButton_);
+    modes->addWidget(listButton_);
     modes->addWidget(shuffle);
 
     stack_ = new QStackedWidget;
@@ -157,6 +159,28 @@ MusicView::MusicView(Library *library, QWidget *parent)
     albumGrid_->setItemDelegate(new CoverDelegate(QSize(168, 214), QSize(140, 140), false, albumGrid_));
     albumGrid_->setSelectionMode(QAbstractItemView::SingleSelection);
     albumGrid_->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    albumTable_ = new QTableWidget;
+    prepareCount(albumTable_, {QStringLiteral("Album"), QStringLiteral("Artist"), QStringLiteral("Year"), QStringLiteral("Songs")});
+    albumTable_->setColumnWidth(2, 72);
+    albumTable_->hide();
+
+    auto *songGrid = new QListView;
+    songGrid_ = songGrid;
+    songGrid_->setViewMode(QListView::IconMode);
+    songGrid_->setResizeMode(QListView::Adjust);
+    songGrid_->setMovement(QListView::Static);
+    songGrid_->setSpacing(2);
+    songGrid_->setUniformItemSizes(true);
+    songGrid_->setLayoutMode(QListView::Batched);
+    songGrid_->setBatchSize(24);
+    songGrid_->setWordWrap(true);
+    songGrid_->setMouseTracking(true);
+    songGrid_->viewport()->setAttribute(Qt::WA_Hover);
+    songGrid_->setItemDelegate(new CoverDelegate(QSize(148, 190), QSize(120, 120), false, songGrid_));
+    songGrid_->setSelectionMode(QAbstractItemView::SingleSelection);
+    songGrid_->setContextMenuPolicy(Qt::CustomContextMenu);
+    songGrid_->hide();
 
     artists_ = new QTableWidget;
     genres_ = new QTableWidget;
@@ -206,16 +230,16 @@ MusicView::MusicView(Library *library, QWidget *parent)
     addFilter(QStringLiteral("Label"), labelFilter_, 1);
     songsLayout->addLayout(filters);
     songsLayout->addWidget(table_, 1);
+    songsLayout->addWidget(songGrid_, 1);
 
     auto *detail = new QWidget;
     auto *detailLayout = new QVBoxLayout(detail);
     detailLayout->setContentsMargins(16, 12, 16, 8);
     auto *detailBar = new QHBoxLayout;
-    auto *back = new QPushButton(QStringLiteral("Back"));
+    auto *back = Icons::iconButton(Icons::back(), QStringLiteral("Back"), this);
     detailTitle_ = new QLabel;
     detailTitle_->setObjectName(QStringLiteral("section"));
-    auto *playAlbum = new QPushButton(QStringLiteral("Play"));
-    playAlbum->setObjectName(QStringLiteral("primary"));
+    auto *playAlbum = Icons::iconButton(Icons::play(QColor(QStringLiteral("#1a140c"))), QStringLiteral("Play"), this, true);
     detailBar->addWidget(back);
     detailBar->addWidget(detailTitle_, 1);
     detailBar->addWidget(playAlbum);
@@ -228,8 +252,27 @@ MusicView::MusicView(Library *library, QWidget *parent)
     detailTable_->sortByColumn(1, Qt::AscendingOrder);
     detailLayout->addLayout(detailBar);
     detailLayout->addWidget(detailTable_, 1);
+    detailGrid_ = new QListView;
+    detailGrid_->setViewMode(QListView::IconMode);
+    detailGrid_->setResizeMode(QListView::Adjust);
+    detailGrid_->setMovement(QListView::Static);
+    detailGrid_->setSpacing(2);
+    detailGrid_->setUniformItemSizes(true);
+    detailGrid_->setWordWrap(true);
+    detailGrid_->setMouseTracking(true);
+    detailGrid_->viewport()->setAttribute(Qt::WA_Hover);
+    detailGrid_->setItemDelegate(new CoverDelegate(QSize(148, 190), QSize(120, 120), false, detailGrid_));
+    detailGrid_->setContextMenuPolicy(Qt::CustomContextMenu);
+    detailGrid_->hide();
+    detailLayout->addWidget(detailGrid_, 1);
 
-    stack_->addWidget(albumGrid_);
+    auto *albumPage = new QWidget;
+    auto *albumLay = new QVBoxLayout(albumPage);
+    albumLay->setContentsMargins(0, 0, 0, 0);
+    albumLay->setSpacing(0);
+    albumLay->addWidget(albumGrid_, 1);
+    albumLay->addWidget(albumTable_, 1);
+    stack_->addWidget(albumPage);
     stack_->addWidget(artists_);
     stack_->addWidget(songs);
     stack_->addWidget(genres_);
@@ -278,6 +321,16 @@ MusicView::MusicView(Library *library, QWidget *parent)
         ensureSection(3);
     });
     connect(shuffle, &QPushButton::clicked, this, &MusicView::shuffleRequested);
+    connect(coversButton_, &QPushButton::clicked, this, [this] {
+        covers_ = true;
+        applyShape();
+    });
+    connect(listButton_, &QPushButton::clicked, this, [this] {
+        covers_ = false;
+        applyShape();
+        if (stack_ && stack_->currentIndex() == 0)
+            fillAlbumTable();
+    });
     connect(back, &QPushButton::clicked, this, [this] {
         stack_->setCurrentIndex(0);
         ensureSection(0);
@@ -352,8 +405,86 @@ MusicView::MusicView(Library *library, QWidget *parent)
         const QString name = item->data(Qt::UserRole).toString();
         showTracks(library_->genreTracks(name), item->text(), false);
     });
+    songGrid_->setModel(proxy_);
+    detailGrid_->setModel(detailProxy_);
     wireTable(table_);
     wireTable(detailTable_);
+    wireCovers(songGrid_, proxy_);
+    wireCovers(detailGrid_, detailProxy_);
+    connect(albumTable_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        QTableWidgetItem *item = albumTable_->item(row, 0);
+        if (!item)
+            return;
+        openAlbum(item->data(Qt::UserRole).toString(), item->data(Qt::UserRole + 1).toString());
+    });
+    applyShape();
+}
+
+void MusicView::wireCovers(QListView *grid, QAbstractItemModel *model)
+{
+    if (!grid || !model)
+        return;
+    connect(grid, &QListView::doubleClicked, this, [this, model](const QModelIndex &index) {
+        QList<Track> tracks;
+        for (int row = 0; row < model->rowCount(); ++row)
+            tracks.append(model->index(row, 0).data(CoverRoles::TrackRole).value<Track>());
+        if (!tracks.isEmpty())
+            emit playTracks(tracks, index.row());
+    });
+    connect(grid, &QWidget::customContextMenuRequested, this, [this, grid](const QPoint &pos) {
+        const QModelIndex index = grid->indexAt(pos);
+        if (!index.isValid())
+            return;
+        const Track track = index.data(CoverRoles::TrackRole).value<Track>();
+        if (track.path.isEmpty() && track.id <= 0)
+            return;
+        emit contextTracks({track}, grid->viewport()->mapToGlobal(pos));
+    });
+}
+
+void MusicView::fillAlbumTable()
+{
+    if (!albumTable_ || !library_)
+        return;
+    const QList<Album> albums = library_->albums();
+    albumTable_->setSortingEnabled(false);
+    albumTable_->setUpdatesEnabled(false);
+    albumTable_->setRowCount(albums.size());
+    for (int i = 0; i < albums.size(); ++i) {
+        const Album &album = albums.at(i);
+        auto *name = new QTableWidgetItem(album.album);
+        name->setData(Qt::UserRole, album.albumArtist);
+        name->setData(Qt::UserRole + 1, album.album);
+        name->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+        albumTable_->setItem(i, 0, name);
+        auto *artist = new QTableWidgetItem(album.albumArtist);
+        artist->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+        albumTable_->setItem(i, 1, artist);
+        setCountCell(albumTable_, i, 2, album.year);
+        setCountCell(albumTable_, i, 3, album.tracks);
+    }
+    albumTable_->setUpdatesEnabled(true);
+    keepSort(albumTable_, 0);
+}
+
+void MusicView::applyShape()
+{
+    if (coversButton_)
+        coversButton_->setChecked(covers_);
+    if (listButton_)
+        listButton_->setChecked(!covers_);
+    if (albumGrid_)
+        albumGrid_->setVisible(covers_);
+    if (albumTable_)
+        albumTable_->setVisible(!covers_);
+    if (table_)
+        table_->setVisible(!covers_);
+    if (songGrid_)
+        songGrid_->setVisible(covers_);
+    if (detailTable_)
+        detailTable_->setVisible(!covers_);
+    if (detailGrid_)
+        detailGrid_->setVisible(covers_);
 }
 
 void MusicView::wireTable(QTableView *table)
@@ -416,6 +547,7 @@ void MusicView::ensureSection(int page)
         const int albumScroll = albumGrid_->verticalScrollBar()->value();
         albums_->setAlbums(library_->albums());
         albumGrid_->verticalScrollBar()->setValue(albumScroll);
+        fillAlbumTable();
         albumsReady_ = true;
     } else if (page == 1 && !artistsReady_) {
         const QList<ArtistRow> rows = library_->artists();

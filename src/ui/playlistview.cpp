@@ -1,12 +1,16 @@
 #include "ui/playlistview.h"
 
+#include "artloader.h"
+#include "icons.h"
 #include "library.h"
+#include "ui/coverdelegate.h"
 #include "ui/trackmodel.h"
 
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
+#include <QListView>
 #include <QListWidget>
 #include <QPushButton>
 #include <QSplitter>
@@ -41,14 +45,16 @@ PlaylistView::PlaylistView(Library *library, QWidget *parent)
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
     table_->setSortingEnabled(true);
 
-    auto *create = new QPushButton(QStringLiteral("New"));
-    auto *rename = new QPushButton(QStringLiteral("Rename"));
-    auto *remove = new QPushButton(QStringLiteral("Delete"));
-    auto *removeItems = new QPushButton(QStringLiteral("Remove from playlist"));
+    auto *create = Icons::iconButton(Icons::plus(), QStringLiteral("New playlist"), this);
+    auto *rename = Icons::iconButton(Icons::pencil(), QStringLiteral("Rename"), this);
+    auto *remove = Icons::iconButton(Icons::trash(), QStringLiteral("Delete playlist"), this);
+    auto *removeItems = Icons::iconButton(Icons::minus(), QStringLiteral("Remove from playlist"), this);
     auto *sideButtons = new QHBoxLayout;
+    sideButtons->setSpacing(4);
     sideButtons->addWidget(create);
     sideButtons->addWidget(rename);
     sideButtons->addWidget(remove);
+    sideButtons->addStretch();
     auto *side = new QVBoxLayout;
     auto *heading = new QLabel(QStringLiteral("Playlists"));
     heading->setObjectName(QStringLiteral("section"));
@@ -58,9 +64,34 @@ PlaylistView::PlaylistView(Library *library, QWidget *parent)
     auto *sideWidget = new QWidget;
     sideWidget->setLayout(side);
 
+    coversButton_ = Icons::iconButton(Icons::grid(), QStringLiteral("Covers"), this);
+    listButton_ = Icons::iconButton(Icons::rows(), QStringLiteral("List"), this);
+    coversButton_->setCheckable(true);
+    listButton_->setCheckable(true);
+    listButton_->setChecked(true);
+    grid_ = new QListView;
+    grid_->setModel(table_->model());
+    grid_->setViewMode(QListView::IconMode);
+    grid_->setResizeMode(QListView::Adjust);
+    grid_->setMovement(QListView::Static);
+    grid_->setSpacing(2);
+    grid_->setUniformItemSizes(true);
+    grid_->setWordWrap(true);
+    grid_->setMouseTracking(true);
+    grid_->viewport()->setAttribute(Qt::WA_Hover);
+    grid_->setItemDelegate(new CoverDelegate(QSize(148, 190), QSize(120, 120), false, grid_));
+    grid_->setContextMenuPolicy(Qt::CustomContextMenu);
+    grid_->hide();
+    auto *shape = new QHBoxLayout;
+    shape->setSpacing(4);
+    shape->addWidget(removeItems);
+    shape->addStretch();
+    shape->addWidget(coversButton_);
+    shape->addWidget(listButton_);
     auto *right = new QVBoxLayout;
+    right->addLayout(shape);
     right->addWidget(table_, 1);
-    right->addWidget(removeItems, 0, Qt::AlignLeft);
+    right->addWidget(grid_, 1);
     auto *rightWidget = new QWidget;
     rightWidget->setLayout(right);
 
@@ -72,6 +103,23 @@ PlaylistView::PlaylistView(Library *library, QWidget *parent)
     layout->setContentsMargins(12, 12, 12, 12);
     layout->addWidget(split);
 
+    connect(ArtLoader::instance(), &ArtLoader::ready, this, [this] {
+        if (grid_ && grid_->isVisible())
+            grid_->viewport()->update();
+    });
+    connect(coversButton_, &QPushButton::clicked, this, [this] {
+        covers_ = true;
+        applyShape();
+    });
+    connect(listButton_, &QPushButton::clicked, this, [this] {
+        covers_ = false;
+        applyShape();
+    });
+    connect(grid_, &QListView::doubleClicked, this, [this](const QModelIndex &index) {
+        const QList<Track> tracks = currentTracks();
+        if (!tracks.isEmpty())
+            emit playTracks(tracks, index.row());
+    });
     connect(names_, &QListWidget::currentRowChanged, this, [this](int) { showCurrent(); });
     connect(create, &QPushButton::clicked, this, [this] {
         bool ok = false;
@@ -169,6 +217,18 @@ void PlaylistView::reload()
         names_->setCurrentRow(selectRow);
     else
         showCurrent();
+}
+
+void PlaylistView::applyShape()
+{
+    if (coversButton_)
+        coversButton_->setChecked(covers_);
+    if (listButton_)
+        listButton_->setChecked(!covers_);
+    if (table_)
+        table_->setVisible(!covers_);
+    if (grid_)
+        grid_->setVisible(covers_);
 }
 
 QList<Track> PlaylistView::currentTracks() const

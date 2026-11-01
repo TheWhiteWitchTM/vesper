@@ -31,6 +31,7 @@ SOURCES += \
     src/icons.cpp \
     src/organize.cpp \
     src/identify.cpp \
+    src/idhunt.cpp \
     src/youtube.cpp \
     src/ui/trackmodel.cpp \
     src/ui/coverdelegate.cpp \
@@ -65,7 +66,9 @@ HEADERS += \
     src/icons.h \
     src/organize.h \
     src/identify.h \
+    src/idhunt.h \
     src/youtube.h \
+    src/version.h \
     src/ui/trackmodel.h \
     src/ui/coverdelegate.h \
     src/ui/lcdplayer.h \

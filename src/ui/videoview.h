@@ -31,6 +31,7 @@ protected:
 
 private:
     void applyMode(int mode);
+    void applyShape();
     void showEpisodes(const QString &show, const QString &title);
     void present();
     void prepareTable();
@@ -50,7 +51,10 @@ private:
     class QPushButton *moviesButton_ = nullptr;
     class QPushButton *showsButton_ = nullptr;
     class QPushButton *allButton_ = nullptr;
+    class QPushButton *coversButton_ = nullptr;
+    class QPushButton *listButton_ = nullptr;
     int mode_ = 0;
+    bool covers_ = true;
     QString showKey_;
     QString showTitle_;
     QList<Track> cached_;

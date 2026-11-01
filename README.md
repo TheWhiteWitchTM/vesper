@@ -37,16 +37,16 @@ Vesper shows up in the app grid as **Vesper** after the desktop file is installe
 - Video opens full screen. The top bar, search, and controls hide while it plays, and come back when the pointer moves or rests on an edge.
 - Rename and organize, from Home or Settings. Names in all capitals or all lowercase take title case, and a small word such as of, the, or und stays lowercase. Mixed case is left as it is. When one show is spelled a few ways, the usual spelling wins. Scene names get a real title. The plan uses the container word already in that library, such as Series, Shows, Movies, or Musik. A file under Series is a show: `Series/BlackSails/1.mp4` becomes Black Sails, season 1, episode 1. A movie folder is not treated as a series. Tagged music goes under Artist / Album. Hash names are renamed when the file actually has a title, and left alone when it does not.
 - Songs has a genre, artist, and album browser, plus a G / PG / R label. Video is Movies, Shows, and All. Video files kept in a music folder, or in a folder you marked as music videos, are listed with the songs and still play as video. A file can be renamed and retagged from its menu or from the one that is playing.
-- While a song plays, the bar above the controls shows the white witch. She dances, and the gold bars follow the beat. A music video keeps its picture. Hover the title in the player for the rest of what is playing. The window button on that player leaves only the player on screen.
+- While a song plays, the bar above the controls shows the white witch. She dances, and the gold bars follow the beat. A music video keeps its picture. Hover the title in the player for the rest of what is playing. Small, half, and large size the picture only. Mini player, in the player menu, is what leaves only the player on screen.
 - A folder named `private` labels its files R. Kids mode, on the transport bar or in Settings, makes shuffle play only G.
-- Id-only names are looked at once a day. A season folder is numbered from the show name with no lookup. Anything still cryptic can be sent to Grok when `XAI_API_KEY` is set, or when the key is saved in `~/.config/vesper/xai_key`.
+- Id-only names are cleaned in the background from sidecars, folder words, YouTube ids, OpenSubtitles hashes, and a reverse image search of a still. A small badge on the player identifies the file that is playing. A season folder is numbered from the show name with no lookup. Anything still cryptic can be sent to Grok when `XAI_API_KEY` is set, or when the key is saved in `~/.config/vesper/xai_key`.
 - Media keys and MPRIS (`org.mpris.MediaPlayer2.vesper`), so the desktop controls work.
 
 Playback starts at 90% volume and stays where you leave it. 100% is normal. The slider goes to 200%.
 
 Vesper is MIT licensed. See `LICENSE`. The About window is Mira, The White Witch.
 
-The library lives in `~/.local/share/vesper/`. Set `VESPER_DATA_DIR` to keep a throwaway one.
+The library lives in `~/.local/share/vesper/vesper/`. Set `VESPER_DATA_DIR` to keep a throwaway one.
 
 ## Keys
 
@@ -55,6 +55,10 @@ Space plays or pauses. Left and right seek 10 seconds, Shift seeks a minute, up 
 ## Build notes
 
 Qt 6 (widgets, sql, dbus, network), TagLib, and libVLC headers come from the system. Pop!_OS does not ship the VLC plugin modules with libVLC alone, so `scripts/fetch-vlc-plugins.sh` downloads them into `third_party/` without root. Launch with `./vesper`, not `build/vesper` directly: the wrapper puts those plugins and Pulse's helper library on the path. `scripts/bundle-dist.sh` copies that same set into `dist/` with Qt, so the player does not need Qt installed.
+
+This is **0.9.3**. The version lives in `VERSION`, and `src/version.h` carries the same string. About and `--version` read it.
+
+`scripts/release.sh` builds the Linux package, the Windows package, and the Apple Silicon package. CMake does the compile. It writes `release/vesper-0.9.3-linux-x86_64.tar.gz`, `release/vesper-0.9.3-windows-x86_64.zip`, and `release/vesper-0.9.3-macos-arm64.zip`. Linux Qt is taken from `QT_PREFIX` or `QT_HOST`, or from `~/Qt/6.12.0/gcc_64`. The Windows build is a MinGW cross-compile against `~/Qt/6.12.0/mingw_64` (`QT_MINGW`). Unzip that package and run `vesper.exe`. The library lands in `%APPDATA%\vesper\vesper`. The Mac build is an arm64 cross-compile against `~/Qt/6.12.0/macos` (`QT_MAC`) and the xmac SDK. It needs macOS 14.4. The app is self-signed as TheWhiteWitchTM, with the same certificate as Blogy, and is not notarized. Open `vesper.app`. The first time, Control-click it and choose Open. The library lands in `~/Library/Application Support/vesper/vesper`. `ghrelease` tags that version, pushes `release/0.9.3`, and copies the packages into `~/Releases`.
 
 ```bash
 ./vesper --dump-scan /path/to/music

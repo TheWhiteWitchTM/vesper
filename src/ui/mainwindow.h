@@ -43,7 +43,6 @@ class Scanner;
 class VideoWidget;
 class TrackModel;
 class IdNamer;
-class DockTools;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -87,12 +86,14 @@ private:
     void setRealFullscreen(bool on);
     void enterSoftScreen();
     void leaveSoftScreen();
-    void placeDockTools();
     bool playerInDock() const;
     void setPlayerCollapsed(bool on);
     void togglePlayerFill();
-    void shrinkPlayerToHalf();
+    void shrinkPlayerToSmall();
     void applyDockSize();
+    // Large hides the library page so the picture fills the column.
+    // Returns true when that visibility changed.
+    bool syncLargePage();
     void clampToScreen();
     void liftStageAbovePanel();
     int filledDockHeight() const;
@@ -112,6 +113,15 @@ private:
     void shuffleLibrary();
     QString shuffleKind() const;
     QList<Track> shufflePool() const;
+    QList<Track> sectionPool(int page) const;
+    void playSection(int page);
+    void shuffleSection(int page);
+    void startSection(int page, bool shuffle);
+    void ejectMedia();
+    void setPlayerSize(int mode);
+    void syncPlayerChrome();
+    void syncPlayerGrip();
+    int preferredSmallHeight() const;
     void labelTracks(const QList<Track> &tracks, const QString &label);
     void setStatus(const QString &text, bool busy = false);
     void showIdleStatus();
@@ -120,7 +130,6 @@ private:
     void setPlayerBusy(bool on);
     void notePlayerBusy(const Track &track);
     bool filmInMini() const;
-    int filmMiniHeight() const;
     void placeLcd();
     void syncLibraryChrome();
     void fitMiniWindow();
@@ -148,7 +157,8 @@ private:
     void addLibraryFolder();
     void runSearch();
     Track trackForPath(const QString &path) const;
-    QList<Track> tracksForOpenedFiles(const QStringList &files, const QList<Track> &streams, int *startIndex) const;
+    void queueOpenedFiles(const QList<Track> &streams, const QStringList &paths, int start, quint64 token);
+    void beginOpenedPlayback(const QList<Track> &playable, int index);
     QString notifyIconPath();
 
     Settings *settings_ = nullptr;
@@ -180,7 +190,6 @@ private:
     class QVBoxLayout *theaterLayout_ = nullptr;
     class QVBoxLayout *dockLayout_ = nullptr;
     PlayerGrip *playerGrip_ = nullptr;
-    DockTools *dockTools_ = nullptr;
     Transport *transport_ = nullptr;
     QList<QPushButton *> nav_;
     QWidget *playRail_ = nullptr;
@@ -230,9 +239,14 @@ private:
     qint64 gripToggleMs_ = 0;
     bool playerFolded_ = false;
     bool playerExpanded_ = false;
+    int playerSizeMode_ = 1;
+    int playerSizeShown_ = 1;
+    bool playerHeightCustom_ = false;
     int dockHeight_ = 188;
     int dragSlack_ = 0;
     bool chromeShown_ = true;
+    bool navFixPending_ = false;
+    bool navApplying_ = false;
     QPoint lastCursor_;
     bool mini_ = false;
     bool playerBusy_ = false;
@@ -240,6 +254,7 @@ private:
     bool scanPinned_ = false;
     QString activityOwner_;
     bool restoring_ = false;
+    quint64 openToken_ = 0;
     bool countedPlay_ = false;
     qint64 playId_ = 0;
     qint64 lastSavedMs_ = -1;

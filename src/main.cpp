@@ -2,17 +2,23 @@
 #include "library.h"
 #include "identify.h"
 #include "organize.h"
-#include "mpris.h"
 #include "player.h"
 #include "scanner.h"
 #include "tags.h"
 #include "ui/mainwindow.h"
+#include "version.h"
 #include "videowidget.h"
+
+#ifdef Q_OS_LINUX
+#include "mpris.h"
+#endif
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#ifdef Q_OS_LINUX
 #include <QDBusConnection>
+#endif
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -306,7 +312,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("vesper"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("vesper.local"));
     QCoreApplication::setApplicationName(QStringLiteral("vesper"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(VESPER_VERSION_STRING));
     QGuiApplication::setApplicationDisplayName(QStringLiteral("Vesper"));
     QGuiApplication::setDesktopFileName(QStringLiteral("vesper"));
     qRegisterMetaType<Track>("Track");
@@ -370,6 +376,7 @@ int main(int argc, char *argv[])
     applyTheme(app);
 
     MainWindow window(paths);
+#ifdef Q_OS_LINUX
     auto *root = new MprisRoot(&window);
     auto *player = new MprisPlayer(window.player(), &window);
     QObject::connect(player, &MprisPlayer::openUriRequested, &window, [&window](const QString &uri) {
@@ -381,6 +388,7 @@ int main(int argc, char *argv[])
     if (!bus.registerService(service))
         bus.registerService(service + QStringLiteral(".instance") + QString::number(QCoreApplication::applicationPid()));
     bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"), &window, QDBusConnection::ExportAdaptors);
+#endif
 
     window.show();
     return app.exec();

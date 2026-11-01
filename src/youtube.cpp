@@ -1,5 +1,7 @@
 #include "youtube.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
@@ -100,6 +102,48 @@ QList<YtVideo> videosFromArray(const QJsonArray &rows, int limit)
         videos.append(video);
     }
     return videos;
+}
+
+QString httpUrl(QString url)
+{
+    url = url.trimmed();
+    if (url.startsWith(QLatin1String("//")))
+        url.prepend(QStringLiteral("https:"));
+    if (!url.startsWith(QLatin1String("http://")) && !url.startsWith(QLatin1String("https://")))
+        return {};
+    return url;
+}
+
+QString widestImage(const QJsonArray &rows)
+{
+    QString best;
+    int width = -1;
+    for (const QJsonValue &value : rows) {
+        const QJsonObject row = value.toObject();
+        QString url = httpUrl(row.value(QStringLiteral("url")).toString());
+        if (url.isEmpty())
+            url = httpUrl(value.toString());
+        if (url.isEmpty())
+            continue;
+        const int w = row.value(QStringLiteral("width")).toInt();
+        if (w >= width) {
+            width = w;
+            best = url;
+        }
+    }
+    return best;
+}
+
+QString playlistCover(const QJsonObject &object)
+{
+    QString cover = httpUrl(object.value(QStringLiteral("playlistThumbnail")).toString());
+    if (cover.isEmpty())
+        cover = httpUrl(object.value(QStringLiteral("thumbnailUrl")).toString());
+    if (cover.isEmpty())
+        cover = httpUrl(object.value(QStringLiteral("thumbnail")).toString());
+    if (cover.isEmpty())
+        cover = widestImage(object.value(QStringLiteral("thumbnails")).toArray());
+    return cover;
 }
 
 YtStream streamFromInvidious(const QJsonObject &object)
@@ -323,9 +367,31 @@ QString youtubeVideoId(const QString &text)
     return {};
 }
 
+QString youtubePlaylistId(const QString &text)
+{
+    const QString trimmed = text.trimmed();
+    QString probe = trimmed;
+    if (probe.startsWith(QLatin1Char('/')))
+        probe = QStringLiteral("https://www.youtube.com") + probe;
+    const QUrl url(probe);
+    if (!youtubeHost(hostOf(probe)) && !probe.startsWith(QLatin1String("http")))
+        return {};
+    QString list = QUrlQuery(url).queryItemValue(QStringLiteral("list"));
+    if (list.startsWith(QLatin1String("VL")))
+        list.remove(0, 2);
+    return list.size() >= 2 ? list : QString();
+}
+
 QString youtubeWatchUrl(const QString &videoId)
 {
     return QStringLiteral("https://www.youtube.com/watch?v=%1").arg(videoId);
+}
+
+QString youtubeThumbUrl(const QString &videoId)
+{
+    if (videoId.size() < 6)
+        return {};
+    return QStringLiteral("https://i.ytimg.com/vi/%1/hqdefault.jpg").arg(videoId);
 }
 
 YtChannelRef youtubeChannelRef(const QString &text)
@@ -438,6 +504,16 @@ int youtubeRulesCheck()
     check("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "", "");
     check("https://youtu.be/dQw4w9WgXcQ", "", "");
     check("https://www.youtube.com/shorts/dQw4w9WgXcQ", "", "");
+    if (youtubePlaylistId(QStringLiteral("https://www.youtube.com/playlist?list=PLabcdef")) != QLatin1String("PLabcdef"))
+        ++errors;
+    if (youtubePlaylistId(QStringLiteral("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabcdef"))
+        != QLatin1String("PLabcdef"))
+        ++errors;
+    if (!youtubePlaylistId(QStringLiteral("https://youtu.be/dQw4w9WgXcQ")).isEmpty())
+        ++errors;
+    if (youtubeThumbUrl(QStringLiteral("dQw4w9WgXcQ"))
+        != QLatin1String("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"))
+        ++errors;
     return errors;
 }
 
@@ -658,8 +734,12 @@ void takeFlatEntries(const QJsonArray &entries, QList<YtVideo> &videos)
 } // namespace
 
 void YoutubeCatalog::emitPlaylist(int token, const QList<YtVideo> &videos, const QString &startVideoId,
-                                  const QString &error)
+                                  const QString &error, const QString &playlistTitle, const QString &playlistAuthor,
+                                  const QString &coverUrl)
 {
+    const QString cover = httpUrl(coverUrl);
+    if (!playlistTitle.trimmed().isEmpty() || !cover.isEmpty())
+        emit playlistReady(token, playlistTitle.trimmed(), playlistAuthor.trimmed(), cover);
     if (videos.isEmpty()) {
         if (!startVideoId.isEmpty()) {
             resolveVideo(token, startVideoId);
@@ -717,14 +797,19 @@ void YoutubeCatalog::startYtdlpPlaylist(int token, const QString &playlistId, co
             [this, process, token, playlistId, startVideoId](int code, QProcess::ExitStatus) {
         const QByteArray output = process->readAllStandardOutput();
         process->deleteLater();
+        const QJsonObject object = QJsonDocument::fromJson(output).object();
         QList<YtVideo> videos;
         if (code == 0 && !output.isEmpty())
-            takeFlatEntries(QJsonDocument::fromJson(output).object().value(QStringLiteral("entries")).toArray(), videos);
+            takeFlatEntries(object.value(QStringLiteral("entries")).toArray(), videos);
         if (videos.isEmpty()) {
             loadPlaylistHttp(token, playlistId, startVideoId);
             return;
         }
-        emitPlaylist(token, videos, startVideoId, {});
+        QString author = object.value(QStringLiteral("uploader")).toString();
+        if (author.isEmpty())
+            author = object.value(QStringLiteral("channel")).toString();
+        emitPlaylist(token, videos, startVideoId, {}, object.value(QStringLiteral("title")).toString(), author,
+                     playlistCover(object));
     });
     process->start();
     timer->start();
@@ -735,17 +820,22 @@ void YoutubeCatalog::loadPlaylistHttp(int token, const QString &playlistId, cons
     fetch(instances_, QStringLiteral("/api/v1/playlists/") + QString::fromUtf8(QUrl::toPercentEncoding(playlistId)),
           [this, token, playlistId, startVideoId](const QJsonDocument &document, const QString &error) {
               QList<YtVideo> videos;
+              QString title;
+              QString author;
+              QString cover;
               if (error.isEmpty()) {
                   const QJsonObject object = document.object();
                   videos = videosFromArray(object.value(QStringLiteral("videos")).toArray(), 80);
-                  const QString author = object.value(QStringLiteral("author")).toString();
+                  title = object.value(QStringLiteral("title")).toString();
+                  author = object.value(QStringLiteral("author")).toString();
+                  cover = playlistCover(object);
                   for (YtVideo &video : videos) {
                       if (video.author.isEmpty())
                           video.author = author;
                   }
               }
               if (!videos.isEmpty()) {
-                  emitPlaylist(token, videos, startVideoId, {});
+                  emitPlaylist(token, videos, startVideoId, {}, title, author, cover);
                   return;
               }
               loadPlaylistPiped(token, playlistId, startVideoId, 0);
@@ -772,7 +862,11 @@ void YoutubeCatalog::loadPlaylistPiped(int token, const QString &playlistId, con
                   loadPlaylistPiped(token, playlistId, startVideoId, index + 1);
                   return;
               }
-              emitPlaylist(token, videos, startVideoId, {});
+              QString title = object.value(QStringLiteral("name")).toString();
+              if (title.isEmpty())
+                  title = object.value(QStringLiteral("title")).toString();
+              emitPlaylist(token, videos, startVideoId, {}, title,
+                           object.value(QStringLiteral("uploader")).toString(), playlistCover(object));
           });
 }
 
@@ -797,20 +891,148 @@ void YoutubeCatalog::channelVideos(int token, const QString &channelId)
         });
         return;
     }
-    fetch(instances_, QStringLiteral("/api/v1/channels/") + QString::fromUtf8(QUrl::toPercentEncoding(channelId))
-              + QStringLiteral("/videos"),
-          [this, token](const QJsonDocument &document, const QString &error) {
+    const QString encoded = QString::fromUtf8(QUrl::toPercentEncoding(channelId));
+    fetch(instances_, QStringLiteral("/api/v1/channels/") + encoded,
+          [this, token, channelId, encoded](const QJsonDocument &document, const QString &error) {
               if (!error.isEmpty()) {
-                  emit videosReady(token, {}, error, 0);
+                  loadChannelPiped(token, channelId, 0, true);
                   return;
               }
-              const QList<YtVideo> videos = videosFromArray(document.object().value(QStringLiteral("videos")).toArray(), 40);
+              const QJsonObject object = document.object();
+              YtChannelInfo info;
+              info.id = object.value(QStringLiteral("authorId")).toString();
+              if (!info.id.startsWith(QLatin1String("UC")))
+                  info.id = channelId;
+              info.name = object.value(QStringLiteral("author")).toString();
+              info.bannerUrl = widestImage(object.value(QStringLiteral("authorBanners")).toArray());
+              info.avatarUrl = widestImage(object.value(QStringLiteral("authorThumbnails")).toArray());
+              if (!info.name.isEmpty() || !info.bannerUrl.isEmpty() || !info.avatarUrl.isEmpty())
+                  emit channelReady(token, info);
+              QList<YtVideo> videos = videosFromArray(object.value(QStringLiteral("latestVideos")).toArray(), 40);
+              if (videos.isEmpty())
+                  videos = videosFromArray(object.value(QStringLiteral("videos")).toArray(), 40);
+              if (!videos.isEmpty()) {
+                  emit videosReady(token, videos, {}, 0);
+                  if (info.bannerUrl.isEmpty())
+                      loadChannelPiped(token, channelId, 0, false);
+                  return;
+              }
+              fetch(instances_, QStringLiteral("/api/v1/channels/") + encoded + QStringLiteral("/videos"),
+                    [this, token, channelId, info](const QJsonDocument &nested, const QString &nestedError) {
+                        const QList<YtVideo> rows = videosFromArray(nested.object().value(QStringLiteral("videos")).toArray(), 40);
+                        if (!nestedError.isEmpty() || rows.isEmpty()) {
+                            loadChannelPiped(token, channelId, 0, true);
+                            return;
+                        }
+                        emit videosReady(token, rows, {}, 0);
+                        if (info.bannerUrl.isEmpty())
+                            loadChannelPiped(token, channelId, 0, false);
+                    });
+          });
+}
+
+void YoutubeCatalog::loadChannelPiped(int token, const QString &channelId, int index, bool videosNeeded)
+{
+    if (index >= piped_.size()) {
+        if (videosNeeded)
+            emit videosReady(token, {}, QStringLiteral("That channel didn't list any videos."), 0);
+        return;
+    }
+    fetch({piped_.at(index)}, QStringLiteral("/channel/") + QString::fromUtf8(QUrl::toPercentEncoding(channelId)),
+          [this, token, channelId, index, videosNeeded](const QJsonDocument &document, const QString &error) {
+              if (!error.isEmpty()) {
+                  loadChannelPiped(token, channelId, index + 1, videosNeeded);
+                  return;
+              }
+              const QJsonObject object = document.object();
+              YtChannelInfo info;
+              info.id = object.value(QStringLiteral("id")).toString();
+              if (!info.id.startsWith(QLatin1String("UC")))
+                  info.id = channelId;
+              info.name = object.value(QStringLiteral("name")).toString();
+              info.bannerUrl = httpUrl(object.value(QStringLiteral("bannerUrl")).toString());
+              info.avatarUrl = httpUrl(object.value(QStringLiteral("avatarUrl")).toString());
+              if (!info.name.isEmpty() || !info.bannerUrl.isEmpty() || !info.avatarUrl.isEmpty())
+                  emit channelReady(token, info);
+              if (!videosNeeded)
+                  return;
+              QList<YtVideo> videos = videosFromArray(object.value(QStringLiteral("relatedStreams")).toArray(), 40);
+              if (videos.isEmpty())
+                  videos = videosFromArray(object.value(QStringLiteral("videos")).toArray(), 40);
               if (videos.isEmpty()) {
-                  emit videosReady(token, {}, QStringLiteral("That channel didn't list any videos."), 0);
+                  loadChannelPiped(token, channelId, index + 1, true);
                   return;
               }
               emit videosReady(token, videos, {}, 0);
           });
+}
+
+void YoutubeCatalog::downloadVideo(const QString &videoId, const QString &directory)
+{
+    if (videoId.isEmpty() || directory.trimmed().isEmpty()) {
+        emit downloadFinished(videoId, {}, QStringLiteral("Nowhere to save that."));
+        return;
+    }
+    if (download_) {
+        emit downloadFinished(videoId, {}, QStringLiteral("A download is already running."));
+        return;
+    }
+    if (ytdlp_.isEmpty())
+        ytdlp_ = QStandardPaths::findExecutable(QStringLiteral("yt-dlp"));
+    if (ytdlp_.isEmpty()) {
+        emit downloadFinished(videoId, {}, QStringLiteral("yt-dlp isn't installed."));
+        return;
+    }
+    QDir().mkpath(directory);
+    auto *process = new QProcess(this);
+    download_ = process;
+    process->setProgram(ytdlp_);
+    process->setArguments({
+        QStringLiteral("--no-playlist"),
+        QStringLiteral("--no-warnings"),
+        QStringLiteral("--newline"),
+        QStringLiteral("-f"),
+        QStringLiteral("bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b"),
+        QStringLiteral("--merge-output-format"),
+        QStringLiteral("mp4"),
+        QStringLiteral("-o"),
+        QDir(directory).filePath(QStringLiteral("%(title).80s [%(id)s].%(ext)s")),
+        QStringLiteral("--print"),
+        QStringLiteral("after_move:%(filepath)s"),
+        youtubeWatchUrl(videoId),
+    });
+    connect(process, &QProcess::finished, this, [this, process, videoId](int code, QProcess::ExitStatus) {
+        const QString output = QString::fromUtf8(process->readAllStandardOutput());
+        QString err = QString::fromUtf8(process->readAllStandardError()).trimmed();
+        process->deleteLater();
+        if (download_ == process)
+            download_ = nullptr;
+        QString file;
+        const QStringList lines = output.split(QLatin1Char('\n'));
+        for (int i = lines.size() - 1; i >= 0; --i) {
+            const QString line = lines.at(i).trimmed();
+            if (line.isEmpty() || line.startsWith(QLatin1Char('[')))
+                continue;
+            if (QFileInfo::exists(line)) {
+                file = QFileInfo(line).absoluteFilePath();
+                break;
+            }
+        }
+        if (file.isEmpty()) {
+            const int nl = err.lastIndexOf(QLatin1Char('\n'));
+            if (nl >= 0)
+                err = err.mid(nl + 1).trimmed();
+            if (err.startsWith(QLatin1String("ERROR:")))
+                err = err.mid(6).trimmed();
+            if (err.size() > 180)
+                err = err.left(180);
+            emit downloadFinished(videoId, {}, err.isEmpty() || code == 0
+                ? QStringLiteral("Couldn't download that video.") : err);
+            return;
+        }
+        emit downloadFinished(videoId, file, {});
+    });
+    process->start();
 }
 
 void YoutubeCatalog::searchVideos(int token, const QString &query)

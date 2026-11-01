@@ -1,5 +1,7 @@
 #include "library.h"
 
+#include "youtube.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QSqlError>
@@ -700,7 +702,7 @@ QList<Track> Library::continueWatching(int limit) const
 QList<Track> Library::needsMetadata(int limit) const
 {
     return queryTracks(QStringLiteral(
-        "SELECT * FROM tracks WHERE meta_tried=0 AND ("
+        "SELECT * FROM tracks WHERE meta_tried=0 AND path NOT LIKE 'http://%' AND path NOT LIKE 'https://%' AND ("
         " artwork IS NULL OR artwork='' OR "
         " ((kind='audio' OR IFNULL(shelf,'')='music') AND (lyrics IS NULL OR lyrics='')) OR "
         " (kind='video' AND IFNULL(shelf,'')<>'music' AND (overview IS NULL OR overview=''))) "
@@ -718,6 +720,40 @@ Track Library::trackByPath(const QString &path) const
 {
     const QList<Track> rows = queryTracks(QStringLiteral("SELECT * FROM tracks WHERE path=?"), {path});
     return rows.isEmpty() ? Track{} : rows.first();
+}
+
+Track Library::youtubeDouble(const QString &videoId, const QString &title, const QString &artist) const
+{
+    const QString id = videoId.trimmed();
+    if (id.size() >= 6) {
+        const Track exact = trackByPath(youtubeWatchUrl(id));
+        Track fileHit;
+        Track anyHit = exact;
+        const QList<Track> hits = queryTracks(listSelect(QStringLiteral(
+            "WHERE path LIKE ? ESCAPE '\\' LIMIT 12")), {likePattern(id)});
+        for (const Track &hit : hits) {
+            if (!hit.path.contains(id))
+                continue;
+            if (!isStreamUrl(hit.path)) {
+                fileHit = hit;
+                break;
+            }
+            if (anyHit.id <= 0)
+                anyHit = hit;
+        }
+        if (fileHit.id > 0)
+            return fileHit;
+        if (anyHit.id > 0)
+            return anyHit;
+    }
+    const QString cleanTitle = title.trimmed();
+    const QString cleanArtist = artist.trimmed();
+    if (cleanTitle.isEmpty() || cleanArtist.isEmpty())
+        return {};
+    const QList<Track> same = queryTracks(listSelect(QStringLiteral(
+        "WHERE title = ? COLLATE NOCASE AND artist = ? COLLATE NOCASE LIMIT 8")),
+        {cleanTitle, cleanArtist});
+    return same.isEmpty() ? Track{} : same.first();
 }
 
 QString Library::albumArtwork(const QString &albumArtist, const QString &album) const
@@ -915,9 +951,10 @@ void Library::resetMissingMetadata()
 {
     QSqlQuery q(db_);
     q.exec(QStringLiteral(
-        "UPDATE tracks SET meta_tried=0 WHERE artwork IS NULL OR artwork='' "
+        "UPDATE tracks SET meta_tried=0 WHERE path NOT LIKE 'http://%' AND path NOT LIKE 'https://%' AND ("
+        "artwork IS NULL OR artwork='' "
         "OR ((kind='audio' OR IFNULL(shelf,'')='music') AND (lyrics IS NULL OR lyrics='')) "
-        "OR (kind='video' AND IFNULL(shelf,'')<>'music' AND (overview IS NULL OR overview=''))"));
+        "OR (kind='video' AND IFNULL(shelf,'')<>'music' AND (overview IS NULL OR overview='')))"));
 }
 
 qint64 Library::createPlaylist(const QString &name)
@@ -976,7 +1013,8 @@ QList<Track> Library::playlistTracks(qint64 id) const
         "tracks.shelf, "
         "playlist_items.id AS item_id FROM playlist_items "
         "JOIN tracks ON tracks.id = playlist_items.track_id "
-        "WHERE playlist_items.playlist_id=? ORDER BY playlist_items.position, playlist_items.id"));
+        "WHERE playlist_items.playlist_id=? ORDER BY playlist_items.position, playlist_items.id"),
+        {id});
 }
 
 void Library::addToPlaylist(qint64 playlistId, const QList<qint64> &trackIds)

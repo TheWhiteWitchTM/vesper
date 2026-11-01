@@ -1,5 +1,6 @@
 #include "identify.h"
 
+#include "idhunt.h"
 #include "library.h"
 #include "organize.h"
 #include "player.h"
@@ -26,6 +27,7 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -409,7 +411,31 @@ IdNamer::IdNamer(Library *library, Player *player, Settings *settings, QObject *
     , player_(player)
     , settings_(settings)
     , network_(new QNetworkAccessManager(this))
+    , hunt_(new IdHunt(this))
 {
+    connect(hunt_, &IdHunt::status, this, [this](const QString &text) {
+        const Track track = hunt_->track();
+        emit working(-1, QStringLiteral("Identifying\n%1\n%2")
+                             .arg(text, QFileInfo(track.path).fileName()));
+    });
+    connect(hunt_, &IdHunt::finished, this, [this](const IdItem &item, const QString &source) {
+        applyHunt(item, source);
+    });
+    connect(hunt_, &IdHunt::failed, this, [this](const QString &reason) {
+        const Track track = hunt_->track();
+        const bool user = hunt_->userJob();
+        if (user) {
+            askUserGrok(track, reason);
+            return;
+        }
+        if (track.id > 0) {
+            const bool spent = settings_->identifyDay() == QDate::currentDate().toString(Qt::ISODate);
+            if (!settings_->identifyEnabled() || spent || !huntThenGrok_)
+                library_->setIdLookup({track.id}, 2);
+        }
+        ++huntTried_;
+        QTimer::singleShot(500, this, [this] { kickHunt(); });
+    });
 }
 
 void IdNamer::remember(const QString &note, bool spendDay)
@@ -530,6 +556,7 @@ QList<Track> IdNamer::nextCluster(const QList<Track> &all, QList<Track> *context
 struct GroomPlan {
     int numbered = 0;
     QList<Track> renames;
+    QList<Track> unknown;
 };
 
 QString timeLeftText(qint64 ms)
@@ -549,35 +576,37 @@ QString timeLeftText(qint64 ms)
     return QStringLiteral("%1 hr %2 min left").arg(hr).arg(rem);
 }
 
-struct RenameOutcome {
-    bool renamed = false;
-    QString before;
-    QString dest;
-    Track stored;
-};
-
-// File rename and tag write only. The library row is updated on the UI thread.
-RenameOutcome writeIdentityFiles(const Track &stored)
+IdentityFilesResult writeIdentityFiles(const Track &stored, bool writeTags, bool renameFile)
 {
-    RenameOutcome out;
+    IdentityFilesResult out;
     out.stored = stored;
     out.before = stored.path;
     if (stored.path.isEmpty() || isStreamUrl(stored.path))
         return out;
-    const QString base = mediaBaseName(stored);
-    const QString current = QFileInfo(stored.path).completeBaseName();
-    if (!base.isEmpty() && base != current) {
-        const QString dest = uniqueMediaPath(stored.path, base);
-        QString moveError;
-        if (moveMediaWithSidecars(stored.path, dest, &moveError)
-            && QFileInfo(dest).absoluteFilePath() != QFileInfo(stored.path).absoluteFilePath()) {
-            out.renamed = true;
-            out.dest = dest;
-            out.stored.path = dest;
+    if (renameFile) {
+        const QString base = mediaBaseName(stored);
+        const QString current = QFileInfo(stored.path).completeBaseName();
+        if (!base.isEmpty() && base != current) {
+            const QString dest = uniqueMediaPath(stored.path, base);
+            QString moveError;
+            if (!moveMediaWithSidecars(stored.path, dest, &moveError)) {
+                out.error = moveError;
+            } else if (QFileInfo(dest).absoluteFilePath() != QFileInfo(stored.path).absoluteFilePath()) {
+                out.renamed = true;
+                out.dest = dest;
+                out.stored.path = dest;
+            }
         }
     }
-    QString tagError;
-    writeTrackTags(out.stored, &tagError);
+    if (writeTags) {
+        QString tagError;
+        if (!writeTrackTags(out.stored, &tagError)) {
+            out.tagsOk = false;
+            if (!out.error.isEmpty())
+                out.error += QLatin1Char(' ');
+            out.error += tagError;
+        }
+    }
     return out;
 }
 
@@ -631,7 +660,9 @@ int writeSeriesNumbers(const QString &dbPath, const QList<IdItem> &items)
 
 void IdNamer::maybeRun()
 {
-    if (busy_ || failedThisSession_ || grooming_)
+    if (busy_ || failedThisSession_ || grooming_ || writing_)
+        return;
+    if ((hunt_ && hunt_->busy()) || !huntQueue_.isEmpty())
         return;
     beginGroom(false);
 }
@@ -642,19 +673,46 @@ void IdNamer::runNow()
         emit statusChanged(QStringLiteral("Still asking Grok about the last file"));
         return;
     }
-    if (grooming_)
+    if (grooming_ || writing_ || (hunt_ && hunt_->busy()) || !huntQueue_.isEmpty())
         return;
     failedThisSession_ = false;
     beginGroom(true);
 }
 
+void IdNamer::identifyPlaying(const Track &track, const QImage &frame)
+{
+    if (track.path.isEmpty() || isStreamUrl(track.path)) {
+        emit statusChanged(QStringLiteral("That file cannot be identified."));
+        return;
+    }
+    HuntJob job;
+    job.track = track;
+    job.frame = frame;
+    job.user = true;
+    for (int i = huntQueue_.size() - 1; i >= 0; --i) {
+        if (huntQueue_.at(i).track.path == track.path)
+            huntQueue_.removeAt(i);
+    }
+    huntQueue_.prepend(job);
+    emit identifying(true);
+    emit working(-1, QStringLiteral("Identifying\nLooking up this file\n%1")
+                         .arg(QFileInfo(track.path).fileName()));
+    if (!grooming_ && !writing_ && !(hunt_ && hunt_->busy()))
+        kickHunt();
+}
+
 void IdNamer::beginGroom(bool thenAsk)
 {
+    if (writing_)
+        return;
     grooming_ = true;
     groomThenAsk_ = thenAsk;
     groomNumbered_ = 0;
     groomRenamed_ = 0;
+    huntFound_ = 0;
+    huntTried_ = 0;
     renameQueue_.clear();
+    huntQueue_.clear();
     renameAt_ = 0;
     renameStartedMs_ = 0;
     emit working(-1, QStringLiteral("Checking file names\nReading the library\n"));
@@ -677,6 +735,11 @@ void IdNamer::beginGroom(bool thenAsk)
             return;
         self->groomNumbered_ = plan.numbered;
         self->renameQueue_ = plan.renames;
+        for (const Track &track : plan.unknown) {
+            HuntJob job;
+            job.track = track;
+            self->huntQueue_.append(job);
+        }
         self->renameAt_ = 0;
         self->renameStartedMs_ = 0;
         self->applyRenameChunk();
@@ -729,8 +792,11 @@ void IdNamer::beginGroom(bool thenAsk)
             const QFileInfo info(track.path);
             if (!nameIsCrypticId(info.completeBaseName()))
                 continue;
-            if (mediaBaseName(track).isEmpty())
+            if (mediaBaseName(track).isEmpty()) {
+                if (plan.unknown.size() < 48)
+                    plan.unknown.append(track);
                 continue;
+            }
             if (!info.exists() || !QFileInfo(info.absolutePath()).isWritable())
                 continue;
             plan.renames.append(track);
@@ -770,10 +836,10 @@ void IdNamer::applyRenameChunk()
     Track stored = library_->trackById(track.id);
     if (stored.id <= 0)
         stored = track;
-    auto *watcher = new QFutureWatcher<RenameOutcome>(this);
+    auto *watcher = new QFutureWatcher<IdentityFilesResult>(this);
     QPointer<IdNamer> self(this);
-    connect(watcher, &QFutureWatcher<RenameOutcome>::finished, this, [self, watcher] {
-        const RenameOutcome out = watcher->result();
+    connect(watcher, &QFutureWatcher<IdentityFilesResult>::finished, this, [self, watcher] {
+        const IdentityFilesResult out = watcher->result();
         watcher->deleteLater();
         if (!self)
             return;
@@ -790,33 +856,425 @@ void IdNamer::applyRenameChunk()
     // The rename and the tag write run on the pool. This thread only paints
     // the percent, the time left, and the file name.
     watcher->setFuture(QtConcurrent::run([stored] {
-        return writeIdentityFiles(stored);
+        return writeIdentityFiles(stored, true, true);
     }));
 }
 
 void IdNamer::finishGroom()
 {
     grooming_ = false;
+    huntThenGrok_ = true;
     const bool named = groomNumbered_ > 0 || groomRenamed_ > 0;
-    const bool spent = settings_->identifyDay() == QDate::currentDate().toString(Qt::ISODate);
     if (named) {
         const int count = qMax(groomNumbered_, groomRenamed_);
         emit statusChanged(QStringLiteral("Named %1 series file%2 from the folder")
                                .arg(count)
                                .arg(count == 1 ? QString() : QStringLiteral("s")));
     }
+    kickHunt();
+}
+
+void IdNamer::kickHunt()
+{
+    if (grooming_ || busy_ || writing_)
+        return;
+    if (hunt_ && hunt_->busy())
+        return;
+    if (huntQueue_.isEmpty()) {
+        finishHunt();
+        return;
+    }
+    HuntJob job = huntQueue_.takeFirst();
+    if (job.track.id > 0) {
+        const Track fresh = library_->trackById(job.track.id);
+        if (fresh.id > 0)
+            job.track = fresh;
+    }
+    if (!trackNeedsIdentity(job.track) && !job.user) {
+        QTimer::singleShot(0, this, [this] { kickHunt(); });
+        return;
+    }
+    hunt_->setUserJob(job.user);
+    const bool network = job.user || settings_->fetchOnline();
+    emit working(-1, QStringLiteral("Identifying\n%1\n%2")
+                         .arg(network ? QStringLiteral("Looking it up") : QStringLiteral("Reading the folder"),
+                              QFileInfo(job.track.path).fileName()));
+    hunt_->start(job.track, job.frame, network);
+}
+
+void IdNamer::finishHunt()
+{
+    if (huntFound_ > 0) {
+        const QString note = huntFound_ == 1
+            ? QStringLiteral("Named 1 file from a lookup.")
+            : QStringLiteral("Named %1 files from a lookup.").arg(huntFound_);
+        remember(note, false);
+        emit statusChanged(note);
+        library_->refresh();
+    }
+    const bool ask = huntThenGrok_;
+    huntThenGrok_ = false;
+    if (!ask)
+        return;
+    const bool spent = settings_->identifyDay() == QDate::currentDate().toString(Qt::ISODate);
+    const bool named = groomNumbered_ > 0 || groomRenamed_ > 0 || huntFound_ > 0;
     if (!settings_->identifyEnabled() || spent) {
         if (groomThenAsk_ && spent && !named)
             emit statusChanged(QStringLiteral("Already looked at one id name today"));
-        else if (!named)
+        else if (!named && huntTried_ == 0)
             emit statusChanged({});
+        groomThenAsk_ = false;
         return;
     }
     startRequest();
 }
 
+void IdNamer::showTitleNow(const IdItem &item)
+{
+    if (!player_ || (item.title.trimmed().isEmpty() && item.show.trimmed().isEmpty()))
+        return;
+    Track playing = player_->current();
+    const bool same = (item.id > 0 && playing.id == item.id)
+        || (!item.path.isEmpty() && !playing.path.isEmpty() && playing.path == item.path);
+    if (!same)
+        return;
+    if (!item.title.trimmed().isEmpty())
+        playing.title = item.title.trimmed();
+    if (!item.show.trimmed().isEmpty())
+        playing.showName = item.show.trimmed();
+    if (!item.artist.trimmed().isEmpty())
+        playing.artist = item.artist.trimmed();
+    if (!item.album.trimmed().isEmpty())
+        playing.album = item.album.trimmed();
+    if (item.year > 0)
+        playing.year = item.year;
+    if (item.season > 0)
+        playing.season = item.season;
+    if (item.episode > 0)
+        playing.episode = item.episode;
+    player_->noteQueued(playing);
+}
+
+void IdNamer::applyHunt(const IdItem &item, const QString &source)
+{
+    showTitleNow(item);
+    ++huntTried_;
+    Track stored = item.id > 0 ? library_->trackById(item.id) : library_->trackByPath(item.path);
+    if (stored.id <= 0 && hunt_)
+        stored = hunt_->track();
+    if (stored.id <= 0 && stored.path.isEmpty())
+        return;
+    if (!item.title.isEmpty())
+        stored.title = item.title;
+    if (!item.show.isEmpty())
+        stored.showName = item.show;
+    if (!item.artist.isEmpty())
+        stored.artist = item.artist;
+    if (!item.album.isEmpty()) {
+        stored.album = item.album;
+        if (stored.albumArtist.isEmpty())
+            stored.albumArtist = item.artist;
+    }
+    if (item.year > 0)
+        stored.year = item.year;
+    if (item.season > 0)
+        stored.season = item.season;
+    if (item.episode > 0)
+        stored.episode = item.episode;
+    ++huntFound_;
+    const bool user = hunt_ && hunt_->userJob();
+    QString name = stored.showName.isEmpty() ? stored.title : stored.showName;
+    if (name.isEmpty())
+        name = item.title.isEmpty() ? item.show : item.title;
+    QString note = QStringLiteral("Named %1").arg(name);
+    if (!source.isEmpty())
+        note += QStringLiteral(" · %1").arg(source);
+    auto finish = [this, user, note](const QString &error) {
+        QString text = note;
+        if (!error.isEmpty())
+            text += QLatin1Char(' ') + error;
+        if (user) {
+            emit identifying(false);
+            remember(text + QLatin1Char('.'), false);
+            emit statusChanged(text + QLatin1Char('.'));
+        }
+        QTimer::singleShot(user ? 200 : 500, this, [this] { kickHunt(); });
+    };
+    if (stored.id <= 0) {
+        if (player_)
+            player_->noteQueued(stored);
+        finish({});
+        return;
+    }
+    library_->updateEditable(stored);
+    Track written = library_->trackById(stored.id);
+    if (written.id <= 0)
+        written = stored;
+    library_->setIdLookup({written.id}, 1);
+    library_->setMetaTried(written.id, false);
+    commitOffThread({written}, true, true, [finish](const QList<IdentityFilesResult> &results) {
+        finish(results.isEmpty() ? QString() : results.first().error);
+    });
+}
+
+void IdNamer::commitOffThread(QList<Track> stored, bool writeTags, bool renameFile,
+                              std::function<void(const QList<IdentityFilesResult> &)> done)
+{
+    writing_ = true;
+    auto *watcher = new QFutureWatcher<QList<IdentityFilesResult>>(this);
+    QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<QList<IdentityFilesResult>>::finished, this,
+            [self, watcher, done = std::move(done)] {
+        const QList<IdentityFilesResult> results = watcher->result();
+        watcher->deleteLater();
+        if (!self)
+            return;
+        for (const IdentityFilesResult &out : results) {
+            if (out.renamed)
+                self->library_->relocateTrack(out.before, out.dest);
+            Track after = out.stored.id > 0 ? self->library_->trackById(out.stored.id) : Track();
+            if (after.id <= 0)
+                after = out.stored;
+            if (self->player_)
+                self->player_->noteQueued(after);
+        }
+        self->writing_ = false;
+        if (done)
+            done(results);
+    });
+    watcher->setFuture(QtConcurrent::run([stored = std::move(stored), writeTags, renameFile] {
+        QList<IdentityFilesResult> results;
+        results.reserve(stored.size());
+        for (const Track &track : stored)
+            results.append(writeIdentityFiles(track, writeTags, renameFile));
+        return results;
+    }));
+}
+
+QByteArray userGrokBody(const Track &track, const QImage &frame, QByteArray jpeg);
+
+void IdNamer::askUserGrok(const Track &track, const QString &why)
+{
+    userTrack_ = track;
+    userFailReason_ = why.trimmed().isEmpty() ? QStringLiteral("Could not name that file.") : why.trimmed();
+    const QString key = xaiKey();
+    if (key.isEmpty() || track.path.isEmpty()) {
+        if (track.id > 0)
+            library_->setIdLookup({track.id}, 2);
+        emit identifying(false);
+        QString note = userFailReason_;
+        if (key.isEmpty())
+            note += QStringLiteral(" Set XAI_API_KEY to name it from the picture.");
+        remember(note, false);
+        emit statusChanged(note);
+        QTimer::singleShot(200, this, [this] { kickHunt(); });
+        return;
+    }
+
+    QByteArray jpeg = hunt_ ? hunt_->jpeg() : QByteArray();
+    QImage frame;
+    if (jpeg.isEmpty() && hunt_ && !hunt_->frame().isNull())
+        frame = hunt_->frame();
+    emit working(-1, QStringLiteral("Identifying\nPreparing the picture\n%1")
+                         .arg(QFileInfo(track.path).fileName()));
+    auto *watcher = new QFutureWatcher<QByteArray>(this);
+    QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<QByteArray>::finished, this, [self, watcher, track, key] {
+        const QByteArray body = watcher->result();
+        watcher->deleteLater();
+        if (!self)
+            return;
+        self->postUserGrok(track, body, key);
+    });
+    // Sidecar read and JPEG encode stay off this thread. The post goes out after.
+    watcher->setFuture(QtConcurrent::run([track, frame, jpeg] {
+        return userGrokBody(track, frame, jpeg);
+    }));
+}
+
+QByteArray userGrokBody(const Track &track, const QImage &frame, QByteArray jpeg)
+{
+    if (jpeg.isEmpty())
+        jpeg = stillJpeg(frame);
+    const QFileInfo info(track.path);
+    QStringList lines;
+    lines << QStringLiteral("File: %1").arg(info.fileName());
+    lines << QStringLiteral("Folder: %1").arg(info.dir().dirName());
+    QDir parent = info.dir();
+    parent.cdUp();
+    lines << QStringLiteral("Parent: %1").arg(parent.dirName());
+    lines << QStringLiteral("Kind: %1").arg(track.kind.isEmpty() ? QStringLiteral("video") : track.kind);
+    if (track.durationMs > 0)
+        lines << QStringLiteral("Length: %1").arg(formatTime(track.durationMs));
+    if (track.width > 0 && track.height > 0)
+        lines << QStringLiteral("Picture: %1x%2").arg(track.width).arg(track.height);
+    if (track.fileSize > 0)
+        lines << QStringLiteral("Bytes: %1").arg(track.fileSize);
+    const QString note = sidecarNote(track.path);
+    if (!note.isEmpty())
+        lines << QStringLiteral("Sidecar: %1").arg(note);
+    if (!jpeg.isEmpty())
+        lines << QStringLiteral("A frame from the middle of the file is attached.");
+    lines << QStringLiteral("Name this one file. The file field must be %1.").arg(info.completeBaseName());
+
+    QJsonArray input;
+    QJsonObject system;
+    system.insert(QStringLiteral("role"), QStringLiteral("system"));
+    system.insert(QStringLiteral("content"), QStringLiteral(
+        "You name the one media file a person is watching. "
+        "The picture, when present, is a frame from that file and is enough to name a known film or episode. "
+        "Use the folder names and the running time as extra evidence. "
+        "If you recognize the picture, set confidence to at least 0.7 and return that title. "
+        "If you are choosing between a few likely titles, return the best one with confidence between 0.4 and 0.6. "
+        "Leave items empty only when you cannot name it at all. "
+        "Reply with one JSON object and no other text: "
+        "{\"confidence\":0,\"reason\":\"\",\"items\":[{\"file\":\"\",\"title\":\"\",\"show\":\"\","
+        "\"season\":0,\"episode\":0,\"year\":0,\"artist\":\"\",\"album\":\"\"}]}"));
+    QJsonObject user;
+    user.insert(QStringLiteral("role"), QStringLiteral("user"));
+    if (jpeg.isEmpty()) {
+        user.insert(QStringLiteral("content"), lines.join(QLatin1Char('\n')));
+    } else {
+        QJsonArray content;
+        QJsonObject text;
+        text.insert(QStringLiteral("type"), QStringLiteral("input_text"));
+        text.insert(QStringLiteral("text"), lines.join(QLatin1Char('\n')));
+        QJsonObject image;
+        image.insert(QStringLiteral("type"), QStringLiteral("input_image"));
+        image.insert(QStringLiteral("image_url"),
+                     QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(jpeg.toBase64()));
+        content.append(text);
+        content.append(image);
+        user.insert(QStringLiteral("content"), content);
+    }
+    input.append(system);
+    input.append(user);
+    QJsonObject body;
+    body.insert(QStringLiteral("model"), QStringLiteral("grok-4.7"));
+    body.insert(QStringLiteral("temperature"), 0);
+    body.insert(QStringLiteral("input"), input);
+    return QJsonDocument(body).toJson(QJsonDocument::Compact);
+}
+
+void IdNamer::postUserGrok(const Track &track, const QByteArray &body, const QString &key)
+{
+    if (key.isEmpty()) {
+        emit identifying(false);
+        const QString note = userFailReason_ + QStringLiteral(" Set XAI_API_KEY to name it from the picture.");
+        remember(note, false);
+        emit statusChanged(note);
+        QTimer::singleShot(200, this, [this] { kickHunt(); });
+        return;
+    }
+    QNetworkRequest request(QUrl(QStringLiteral("https://api.x.ai/v1/responses")));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", QByteArray("Bearer ") + key.toUtf8());
+    request.setTransferTimeout(60000);
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Vesper/1.0 (personal media player)"));
+    userGrok_ = true;
+    emit identifying(true);
+    emit working(-1, QStringLiteral("Identifying\nAsking about the picture\n%1")
+                         .arg(QFileInfo(track.path).fileName()));
+    QNetworkReply *reply = network_->post(request, body);
+    connect(reply, &QNetworkReply::finished, this, [this, reply] { handleUserReply(reply); });
+}
+
+void IdNamer::handleUserReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    userGrok_ = false;
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    auto giveUp = [this](const QString &note) {
+        if (userTrack_.id > 0)
+            library_->setIdLookup({userTrack_.id}, 2);
+        emit identifying(false);
+        remember(note, false);
+        emit statusChanged(note);
+        QTimer::singleShot(200, this, [this] { kickHunt(); });
+    };
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString note = (status == 401 || status == 403)
+            ? QStringLiteral("Grok refused the API key.")
+            : userFailReason_;
+        giveUp(note);
+        return;
+    }
+
+    double confidence = 0;
+    QString reason;
+    const QList<Track> cluster = {userTrack_};
+    const QList<IdItem> items = parseIdentifyBody(reply->readAll(), cluster, &confidence, &reason);
+    IdItem chosen;
+    for (const IdItem &item : items) {
+        if (!item.title.trimmed().isEmpty() || !item.show.trimmed().isEmpty()) {
+            chosen = item;
+            break;
+        }
+    }
+    if (chosen.title.trimmed().isEmpty() && chosen.show.trimmed().isEmpty()) {
+        const QString note = reason.isEmpty() ? userFailReason_ : reason;
+        giveUp(note);
+        return;
+    }
+    if (chosen.title.trimmed().isEmpty())
+        chosen.title = chosen.show.trimmed();
+
+    // A likely name changes the player immediately. A confident one also renames the file.
+    showTitleNow(chosen);
+    Track stored = chosen.id > 0 ? library_->trackById(chosen.id) : library_->trackByPath(chosen.path);
+    if (stored.id <= 0)
+        stored = userTrack_;
+    if (!chosen.title.isEmpty())
+        stored.title = chosen.title;
+    if (!chosen.show.isEmpty())
+        stored.showName = chosen.show;
+    if (!chosen.artist.isEmpty())
+        stored.artist = chosen.artist;
+    if (!chosen.album.isEmpty())
+        stored.album = chosen.album;
+    if (chosen.year > 0)
+        stored.year = chosen.year;
+    if (chosen.season > 0)
+        stored.season = chosen.season;
+    if (chosen.episode > 0)
+        stored.episode = chosen.episode;
+
+    const bool rename = confidence >= 0.55;
+    showTitleNow(chosen);
+    QString name = stored.showName.isEmpty() ? stored.title : stored.showName;
+    auto publish = [this, name, reason, rename](const QString &error) {
+        QString note = rename ? QStringLiteral("Named %1.").arg(name)
+                              : QStringLiteral("Best guess: %1.").arg(name);
+        if (!reason.isEmpty())
+            note += QLatin1Char(' ') + reason;
+        if (!error.isEmpty())
+            note += QLatin1Char(' ') + error;
+        emit identifying(false);
+        remember(note, false);
+        emit statusChanged(note);
+        QTimer::singleShot(200, this, [this] { kickHunt(); });
+    };
+    if (stored.id <= 0) {
+        if (player_)
+            player_->noteQueued(stored);
+        publish({});
+        return;
+    }
+    library_->updateEditable(stored);
+    Track written = library_->trackById(stored.id);
+    if (written.id <= 0)
+        written = stored;
+    if (rename)
+        library_->setIdLookup({written.id}, 1);
+    commitOffThread({written}, true, rename, [publish](const QList<IdentityFilesResult> &results) {
+        publish(results.isEmpty() ? QString() : results.first().error);
+    });
+}
+
 void IdNamer::startRequest()
 {
+    huntThenGrok_ = false;
+    busy_ = true;
     const QString dbPath = dataDir() + QStringLiteral("/library.db");
     auto *watcher = new QFutureWatcher<QList<Track>>(this);
     QPointer<IdNamer> self(this);
@@ -834,16 +1292,38 @@ void IdNamer::startRequest()
 void IdNamer::postIdentifyRequest()
 {
     if (cluster_.isEmpty()) {
+        busy_ = false;
         remember(QStringLiteral("No id-named files left to look at."), false);
+        kickHunt();
         return;
     }
-    const QString key = xaiKey();
-    if (key.isEmpty()) {
-        remember(QStringLiteral("Set XAI_API_KEY, or save the key in ~/.config/vesper/xai_key, to name id files."),
-                 false);
-        return;
-    }
-    busy_ = true;
+    const QList<Track> cluster = cluster_;
+    const QList<Track> context = context_;
+    auto *watcher = new QFutureWatcher<QStringList>(this);
+    QPointer<IdNamer> self(this);
+    connect(watcher, &QFutureWatcher<QStringList>::finished, this, [self, watcher] {
+        const QStringList parts = watcher->result();
+        watcher->deleteLater();
+        if (!self)
+            return;
+        const QString key = parts.value(0);
+        if (key.isEmpty()) {
+            self->busy_ = false;
+            self->remember(QStringLiteral("Set XAI_API_KEY, or save the key in ~/.config/vesper/xai_key, to name id files."),
+                           false);
+            self->kickHunt();
+            return;
+        }
+        self->sendGrokPrompt(key, parts.value(1));
+    });
+    // The key file and the sidecar notes are read off the UI thread.
+    watcher->setFuture(QtConcurrent::run([cluster, context] {
+        return QStringList{xaiKey(), userPrompt(cluster, context)};
+    }));
+}
+
+void IdNamer::sendGrokPrompt(const QString &key, const QString &prompt)
+{
     QNetworkRequest request(QUrl(QStringLiteral("https://api.x.ai/v1/responses")));
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArray("Bearer ") + key.toUtf8());
@@ -855,7 +1335,7 @@ void IdNamer::postIdentifyRequest()
     system.insert(QStringLiteral("content"), systemPrompt());
     QJsonObject user;
     user.insert(QStringLiteral("role"), QStringLiteral("user"));
-    user.insert(QStringLiteral("content"), userPrompt(cluster_, context_));
+    user.insert(QStringLiteral("content"), prompt);
     input.append(system);
     input.append(user);
     QJsonObject body;
@@ -894,6 +1374,7 @@ void IdNamer::handleReply(QNetworkReply *reply)
             : QStringLiteral("Grok could not be reached.");
         remember(note, false);
         emit statusChanged(note);
+        kickHunt();
         return;
     }
 
@@ -910,12 +1391,13 @@ void IdNamer::handleReply(QNetworkReply *reply)
         const QString note = reason.isEmpty() ? QStringLiteral("No confident name for those id files.") : reason;
         remember(note, true);
         emit statusChanged(note);
+        kickHunt();
         return;
     }
 
     int applied = 0;
     QString show;
-    QString problem;
+    QList<Track> batch;
     for (const IdItem &item : items) {
         Track stored = library_->trackById(item.id);
         if (stored.id <= 0)
@@ -939,13 +1421,14 @@ void IdNamer::handleReply(QNetworkReply *reply)
         }
         if (item.year > 0)
             stored.year = item.year;
-        QString error;
-        commitIdentity(library_, player_, stored, true, true, &error);
-        library_->setIdLookup({stored.id}, 1);
+        library_->updateEditable(stored);
+        Track written = library_->trackById(stored.id);
+        if (written.id <= 0)
+            written = stored;
+        library_->setIdLookup({written.id}, 1);
+        batch.append(written);
         if (show.isEmpty())
-            show = stored.showName.isEmpty() ? stored.title : stored.showName;
-        if (!error.isEmpty() && problem.isEmpty())
-            problem = error;
+            show = written.showName.isEmpty() ? written.title : written.showName;
         ++applied;
     }
     QString note = applied == 1 ? QStringLiteral("Named 1 file") : QStringLiteral("Named %1 files").arg(applied);
@@ -954,10 +1437,24 @@ void IdNamer::handleReply(QNetworkReply *reply)
     note += QLatin1Char('.');
     if (!reason.isEmpty())
         note += QLatin1Char(' ') + reason;
-    if (!problem.isEmpty())
-        note += QLatin1Char(' ') + problem;
-    remember(note, true);
-    emit statusChanged(note);
+    if (batch.isEmpty()) {
+        remember(note, true);
+        emit statusChanged(note);
+        kickHunt();
+        return;
+    }
+    commitOffThread(batch, true, true, [this, note](const QList<IdentityFilesResult> &results) {
+        QString text = note;
+        for (const IdentityFilesResult &out : results) {
+            if (!out.error.isEmpty()) {
+                text += QLatin1Char(' ') + out.error;
+                break;
+            }
+        }
+        remember(text, true);
+        emit statusChanged(text);
+        kickHunt();
+    });
 }
 
 int rulesSelfCheck()
@@ -1110,6 +1607,108 @@ int rulesSelfCheck()
         fail(errors, QStringLiteral("low confidence should wait"));
     if (youtubeRulesCheck() != 0)
         fail(errors, QStringLiteral("youtube channel link"));
+
+    Track untitled;
+    untitled.kind = QStringLiteral("video");
+    untitled.path = QStringLiteral("/tmp/08dd878083eec98cb13ca456aacd83103e1ebe55.mp4");
+    if (!trackNeedsIdentity(untitled))
+        fail(errors, QStringLiteral("hash name should need identity"));
+    untitled.title = QStringLiteral("Home");
+    untitled.showName = QStringLiteral("The Expanse");
+    untitled.season = 2;
+    untitled.episode = 3;
+    untitled.idLookup = 1;
+    if (trackNeedsIdentity(untitled))
+        fail(errors, QStringLiteral("named file should not need identity"));
+
+    const QByteArray oembed = QByteArrayLiteral(
+        "{\"title\":\"Never Gonna Give You Up\",\"author_name\":\"Rick Astley\"}");
+    const IdItem tube = parseYoutubeOembed(oembed);
+    if (tube.title != QLatin1String("Never Gonna Give You Up") || tube.artist != QLatin1String("Rick Astley"))
+        fail(errors, QStringLiteral("youtube oembed"));
+
+    const QByteArray osdb = QByteArrayLiteral(
+        "<search><MovieName>The Matrix</MovieName><MovieYear>1999</MovieYear>"
+        "<MovieKind>movie</MovieKind></search>");
+    const IdItem hashed = parseOpenSubtitlesPage(osdb);
+    if (hashed.title != QLatin1String("The Matrix") || hashed.year != 1999)
+        fail(errors, QStringLiteral("opensubtitles parse [%1] %2").arg(hashed.title).arg(hashed.year));
+
+    const QByteArray moe = QByteArrayLiteral(
+        "{\"result\":[{\"similarity\":0.94,\"episode\":5,\"anilist\":{\"title\":"
+        "{\"english\":\"Cowboy Bebop\",\"romaji\":\"Cowboy Bebop\"}}}]}");
+    const IdItem anime = parseTraceMoe(moe);
+    if (anime.show != QLatin1String("Cowboy Bebop") || anime.episode != 5)
+        fail(errors, QStringLiteral("trace.moe parse %1 e%2").arg(anime.show).arg(anime.episode));
+
+    const QByteArray soup = QByteArrayLiteral(
+        "see <a href=\"https://en.wikipedia.org/wiki/The_Matrix_(1999_film)\">The Matrix</a> "
+        "and imdb.com/title/tt0133093\">The Matrix</a>");
+    const IdItem pictured = parseImageSearchPage(soup);
+    if (pictured.title.compare(QLatin1String("The Matrix"), Qt::CaseInsensitive) != 0)
+        fail(errors, QStringLiteral("image search parse [%1]").arg(pictured.title));
+
+    QTemporaryDir tmp;
+    if (tmp.isValid()) {
+        const QString movieDir = tmp.path() + QStringLiteral("/Movies/The Matrix");
+        QDir().mkpath(movieDir);
+        const QString moviePath = movieDir + QStringLiteral("/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4");
+        QFile movie(moviePath);
+        if (movie.open(QIODevice::WriteOnly)) {
+            movie.write(QByteArray(64, 'x'));
+            movie.close();
+        }
+        Track foldered;
+        foldered.kind = QStringLiteral("video");
+        foldered.path = moviePath;
+        fillLocalIdentity(foldered);
+        if (foldered.title.compare(QLatin1String("The Matrix"), Qt::CaseInsensitive) != 0)
+            fail(errors, QStringLiteral("folder movie title [%1]").arg(foldered.title));
+
+        const QString looseDir = tmp.path() + QStringLiteral("/The Matrix");
+        QDir().mkpath(looseDir);
+        const QString loosePath = looseDir + QStringLiteral("/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.mp4");
+        QFile loose(loosePath);
+        if (loose.open(QIODevice::WriteOnly)) {
+            loose.write(QByteArray(64, 'z'));
+            loose.close();
+        }
+        Track looseTrack;
+        looseTrack.kind = QStringLiteral("video");
+        looseTrack.path = loosePath;
+        fillLocalIdentity(looseTrack);
+        if (looseTrack.title.compare(QLatin1String("The Matrix"), Qt::CaseInsensitive) != 0)
+            fail(errors, QStringLiteral("loose folder title [%1]").arg(looseTrack.title));
+
+        const QString jsonPath = tmp.path() + QStringLiteral("/dQw4w9WgXcQ.info.json");
+        const QString mediaPath = tmp.path() + QStringLiteral("/dQw4w9WgXcQ.webm");
+        QFile json(jsonPath);
+        if (json.open(QIODevice::WriteOnly)) {
+            json.write(QByteArrayLiteral("{\"title\":\"Never Gonna Give You Up\",\"uploader\":\"Rick Astley\"}"));
+            json.close();
+        }
+        QFile media(mediaPath);
+        if (media.open(QIODevice::WriteOnly)) {
+            media.write(QByteArray(32, 'y'));
+            media.close();
+        }
+        Track sidecar;
+        sidecar.kind = QStringLiteral("video");
+        sidecar.path = mediaPath;
+        fillLocalIdentity(sidecar);
+        if (sidecar.title != QLatin1String("Never Gonna Give You Up")
+            || sidecar.artist != QLatin1String("Rick Astley"))
+            fail(errors, QStringLiteral("sidecar title [%1] [%2]").arg(sidecar.title, sidecar.artist));
+
+        QFile hashFile(tmp.path() + QStringLiteral("/hash.bin"));
+        if (hashFile.open(QIODevice::WriteOnly)) {
+            hashFile.write(QByteArray(131072, '\0'));
+            hashFile.close();
+            const QString hash = mediaFileHash(hashFile.fileName());
+            if (hash.toULongLong(nullptr, 16) != 131072)
+                fail(errors, QStringLiteral("media hash %1").arg(hash));
+        }
+    }
 
     if (errors == 0)
         std::fprintf(stderr, "rules: ok\n");

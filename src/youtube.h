@@ -33,6 +33,13 @@ struct YtLink {
     QString name;
 };
 
+struct YtChannelInfo {
+    QString id;
+    QString name;
+    QString bannerUrl;
+    QString avatarUrl;
+};
+
 // A pasted channel link. id is the UC… id when the URL contains one.
 // name is the @handle or custom name when that is all the URL has.
 struct YtChannelRef {
@@ -52,11 +59,15 @@ public:
     void openLink(int token, const QString &text);
     void channelVideos(int token, const QString &channelId);
     void searchVideos(int token, const QString &query);
+    void downloadVideo(const QString &videoId, const QString &directory);
 
 signals:
     void streamReady(int token, const YtStream &stream, const QString &error);
     void videosReady(int token, const QList<YtVideo> &videos, const QString &error, int startIndex);
+    void playlistReady(int token, const QString &title, const QString &author, const QString &coverUrl);
+    void channelReady(int token, const YtChannelInfo &info);
     void linkReady(int token, const YtLink &link, const QString &error);
+    void downloadFinished(const QString &videoId, const QString &filePath, const QString &error);
 
 private:
     using JsonDone = std::function<void(const QJsonDocument &, const QString &)>;
@@ -70,10 +81,14 @@ private:
     void startYtdlpPlaylist(int token, const QString &playlistId, const QString &startVideoId);
     void loadPlaylistHttp(int token, const QString &playlistId, const QString &startVideoId);
     void loadPlaylistPiped(int token, const QString &playlistId, const QString &startVideoId, int index);
-    void emitPlaylist(int token, const QList<YtVideo> &videos, const QString &startVideoId, const QString &error);
+    void emitPlaylist(int token, const QList<YtVideo> &videos, const QString &startVideoId, const QString &error,
+                      const QString &playlistTitle = {}, const QString &playlistAuthor = {},
+                      const QString &coverUrl = {});
     void emitStream(int token, const YtStream &stream, const QString &error);
+    void loadChannelPiped(int token, const QString &channelId, int index, bool videosNeeded);
 
     class QNetworkAccessManager *net_ = nullptr;
+    class QProcess *download_ = nullptr;
     QStringList instances_;
     QStringList piped_;
     QString ytdlp_;
@@ -81,7 +96,9 @@ private:
 };
 
 QString youtubeVideoId(const QString &text);
+QString youtubePlaylistId(const QString &text);
 QString youtubeWatchUrl(const QString &videoId);
+QString youtubeThumbUrl(const QString &videoId);
 bool youtubeNeedsResolve(const Track &track);
 // Reads /channel/UC…, /@name, /c/name, /user/name, and a bare @name.
 // A watch, short, or youtu.be link comes back empty.

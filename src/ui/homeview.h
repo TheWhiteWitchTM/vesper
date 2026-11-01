@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QLabel;
+class QPushButton;
 class QScrollArea;
 class QVBoxLayout;
 
@@ -30,10 +31,15 @@ private:
     void refreshArt();
     QWidget *welcome() const;
 
+    void setListMode(bool on);
+
     Library *library_ = nullptr;
     QVBoxLayout *content_ = nullptr;
     QWidget *contentWidget_ = nullptr;
     QScrollArea *scroll_ = nullptr;
     QLabel *greeting_ = nullptr;
+    QPushButton *coversButton_ = nullptr;
+    QPushButton *listButton_ = nullptr;
+    bool listMode_ = false;
     qint64 scrollLockUntil_ = 0;
 };

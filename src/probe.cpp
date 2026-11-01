@@ -1,6 +1,7 @@
 #include "probe.h"
 
 #include <QFile>
+#include <QUrl>
 
 #include <chrono>
 #include <condition_variable>
@@ -35,8 +36,8 @@ void onParsed(const libvlc_event_t *event, void *user)
 Parsed probeFile(libvlc_instance_t *instance, const QString &path)
 {
     Parsed out;
-    const QByteArray encoded = QFile::encodeName(path);
-    libvlc_media_t *media = libvlc_media_new_path(instance, encoded.constData());
+    const QByteArray encoded = QUrl::fromLocalFile(path).toEncoded();
+    libvlc_media_t *media = libvlc_media_new_location(instance, encoded.constData());
     if (!media)
         return out;
     Wait wait;

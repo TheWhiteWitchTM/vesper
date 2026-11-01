@@ -168,14 +168,86 @@ void writePairs(QSettings &settings, const QString &key, const QList<QPair<QStri
 
 } // namespace
 
-QList<QPair<QString, QString>> Settings::radioStations() const
+QList<SavedStation> Settings::radioStations() const
 {
-    return readPairs(settings_, QStringLiteral("radio/stations"));
+    QList<SavedStation> rows;
+    const QStringList stored = settings_.value(QStringLiteral("radio/stations")).toStringList();
+    for (const QString &row : stored) {
+        const QStringList parts = row.split(QLatin1Char('\t'));
+        if (parts.size() < 2)
+            continue;
+        SavedStation station;
+        station.name = parts.at(0).trimmed();
+        station.url = parts.at(1).trimmed();
+        if (parts.size() >= 3)
+            station.category = parts.at(2).trimmed();
+        if (station.name.isEmpty() || station.url.isEmpty())
+            continue;
+        rows.append(station);
+    }
+    return rows;
 }
 
-void Settings::setRadioStations(const QList<QPair<QString, QString>> &stations)
+void Settings::setRadioStations(const QList<SavedStation> &stations)
 {
-    writePairs(settings_, QStringLiteral("radio/stations"), stations);
+    QStringList stored;
+    stored.reserve(stations.size());
+    for (const SavedStation &station : stations) {
+        QString name = station.name;
+        QString url = station.url;
+        QString category = station.category;
+        for (QString *field : {&name, &url, &category}) {
+            field->replace(QLatin1Char('\t'), QLatin1Char(' '));
+            field->replace(QLatin1Char('\n'), QLatin1Char(' '));
+            *field = field->trimmed();
+        }
+        if (name.isEmpty() || url.isEmpty())
+            continue;
+        stored.append(name + QLatin1Char('\t') + url + QLatin1Char('\t') + category);
+    }
+    settings_.setValue(QStringLiteral("radio/stations"), stored);
+    settings_.sync();
+}
+
+QList<SavedPlaylist> Settings::youtubePlaylists() const
+{
+    QList<SavedPlaylist> rows;
+    const QStringList stored = settings_.value(QStringLiteral("youtube/playlists")).toStringList();
+    for (const QString &row : stored) {
+        const QStringList parts = row.split(QLatin1Char('\t'));
+        if (parts.size() < 2)
+            continue;
+        SavedPlaylist list;
+        list.id = parts.at(0).trimmed();
+        list.name = parts.at(1).trimmed();
+        if (parts.size() >= 3)
+            list.thumbId = parts.at(2).trimmed();
+        if (list.id.isEmpty() || list.name.isEmpty())
+            continue;
+        rows.append(list);
+    }
+    return rows;
+}
+
+void Settings::setYoutubePlaylists(const QList<SavedPlaylist> &playlists)
+{
+    QStringList stored;
+    stored.reserve(playlists.size());
+    for (const SavedPlaylist &list : playlists) {
+        QString id = list.id;
+        QString name = list.name;
+        QString thumb = list.thumbId;
+        for (QString *field : {&id, &name, &thumb}) {
+            field->replace(QLatin1Char('\t'), QLatin1Char(' '));
+            field->replace(QLatin1Char('\n'), QLatin1Char(' '));
+            *field = field->trimmed();
+        }
+        if (id.isEmpty() || name.isEmpty())
+            continue;
+        stored.append(id + QLatin1Char('\t') + name + QLatin1Char('\t') + thumb);
+    }
+    settings_.setValue(QStringLiteral("youtube/playlists"), stored);
+    settings_.sync();
 }
 
 QList<QPair<QString, QString>> Settings::youtubeChannels() const

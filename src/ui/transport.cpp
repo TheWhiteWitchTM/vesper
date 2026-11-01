@@ -135,7 +135,7 @@ Transport::Transport(Player *player, QWidget *parent)
     titleLabel_->setObjectName(QStringLiteral("titleLabel"));
     titleLabel_->setMinimumWidth(120);
     titleLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    artistLabel_ = new QLabel(QStringLiteral("Choose something from your library, or drop a file here"));
+    artistLabel_ = new QLabel;
     artistLabel_->setObjectName(QStringLiteral("artistLabel"));
     artistLabel_->setMinimumWidth(80);
     artistLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -204,7 +204,7 @@ Transport::Transport(Player *player, QWidget *parent)
     volume_->setMaximumWidth(110);
     volume_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     volume_->setValue(player_->volume());
-    volume_->setToolTip(QStringLiteral("Volume. Starts at 90% and stays where you leave it. 100% is normal."));
+    volume_->setToolTip(QStringLiteral("Volume"));
     volumeLabel_ = new QLabel(QStringLiteral("%1%").arg(player_->volume()), this);
     volumeLabel_->setObjectName(QStringLiteral("muted"));
     volumeLabel_->setMinimumWidth(44);
@@ -615,7 +615,7 @@ void Transport::fillDetail()
     const Track track = player_->current();
     if (track.path.isEmpty()) {
         detailTitle_->setText(QStringLiteral("Nothing playing"));
-        detailBody_->setText(QStringLiteral("Choose something from your library, or drop a file here."));
+        detailBody_->clear();
         return;
     }
     detailTitle_->setText(track.displayTitle());
@@ -713,7 +713,8 @@ void Transport::ensureQueuePop()
     title->setObjectName(QStringLiteral("titleLabel"));
     auto *dismiss = new QToolButton(queuePop_);
     dismiss->setObjectName(QStringLiteral("barBtn"));
-    dismiss->setText(QStringLiteral("×"));
+    dismiss->setIcon(Icons::dismiss());
+    dismiss->setIconSize(QSize(14, 14));
     dismiss->setToolTip(QStringLiteral("Close"));
     dismiss->setCursor(Qt::PointingHandCursor);
     dismiss->setAutoRaise(true);

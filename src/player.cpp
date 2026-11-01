@@ -70,8 +70,10 @@ Player::Player(QObject *parent)
     args.append("--ignore-config");
     args.append("--no-video-title-show");
     args.append("--no-osd");
+#if defined(Q_OS_LINUX)
     args.append("--no-xlib");
     args.append("--aout=pulse");
+#endif
 
     instance_ = libvlc_new(args.size(), args.constData());
     if (!instance_) {
@@ -358,12 +360,12 @@ void Player::playCurrent()
 
     const QString location = track.streamUrl.isEmpty() ? track.path : track.streamUrl;
     const bool stream = isStreamUrl(location);
-    const QByteArray encoded = stream ? location.toUtf8() : QFile::encodeName(location);
-    libvlc_media_t *media = nullptr;
-    if (stream)
-        media = libvlc_media_new_location(instance_, encoded.constData());
-    else
-        media = libvlc_media_new_path(instance_, encoded.constData());
+    // A file:// URI is UTF-8 on Windows and macOS. libvlc_media_new_path uses the
+    // local code page on Windows and drops characters that are not in that page.
+    const QByteArray encoded = stream
+        ? location.toUtf8()
+        : QUrl::fromLocalFile(location).toEncoded();
+    libvlc_media_t *media = libvlc_media_new_location(instance_, encoded.constData());
     if (!media) {
         emit errorOccurred(QStringLiteral("Can't open %1").arg(track.displayTitle()));
         QTimer::singleShot(0, this, &Player::onEnded);
@@ -872,7 +874,14 @@ QList<QPair<QString, QString>> Player::audioDevices() const
     QList<QPair<QString, QString>> out;
     if (!instance_)
         return out;
-    libvlc_audio_output_device_t *list = libvlc_audio_output_device_list_get(instance_, "pulse");
+#if defined(Q_OS_WIN)
+    const char *output = "mmdevice";
+#elif defined(Q_OS_MACOS)
+    const char *output = "auhal";
+#else
+    const char *output = "pulse";
+#endif
+    libvlc_audio_output_device_t *list = libvlc_audio_output_device_list_get(instance_, output);
     for (auto *device = list; device; device = device->p_next) {
         out.append({QString::fromUtf8(device->psz_device ? device->psz_device : ""),
                     QString::fromUtf8(device->psz_description ? device->psz_description : "")});

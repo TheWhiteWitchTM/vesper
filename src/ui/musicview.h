@@ -36,8 +36,11 @@ private:
     void showTracks(const QList<Track> &tracks, const QString &heading, bool albumMode);
     void openAlbum(const QString &artist, const QString &album);
     void wireTable(QTableView *table);
+    void wireCovers(class QListView *grid, class QAbstractItemModel *model);
     void ensureSection(int page);
     void rebuildBrowser();
+    void fillAlbumTable();
+    void applyShape();
     const QList<Track> &audioTracks();
 
     QString genrePick_;
@@ -49,8 +52,14 @@ private:
     bool songsReady_ = false;
     bool genresReady_ = false;
     bool audioReady_ = false;
+    bool covers_ = true;
     QList<Track> audioCache_;
     class QListView *albumGrid_ = nullptr;
+    class QListView *songGrid_ = nullptr;
+    class QListView *detailGrid_ = nullptr;
+    class QTableWidget *albumTable_ = nullptr;
+    class QPushButton *coversButton_ = nullptr;
+    class QPushButton *listButton_ = nullptr;
     QComboBox *genreFilter_ = nullptr;
     QComboBox *artistFilter_ = nullptr;
     QComboBox *albumFilter_ = nullptr;

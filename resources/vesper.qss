@@ -37,50 +37,9 @@ QWidget#miniDock {
 }
 
 QWidget#playerGrip {
-    background: #1a1612;
+    background: #16130f;
     border: none;
-}
-
-QWidget#playerGrip QToolButton#gripBtn {
-    background: #7a4510;
-    border: none;
-    border-radius: 10px;
-    padding: 0;
-    margin: 0;
-}
-
-QWidget#playerGrip QToolButton#gripBtn:hover {
-    background: #62360c;
-}
-
-QWidget#playerGrip QToolButton#gripBtn:pressed {
-    background: #4e2b0a;
-}
-
-QWidget#dockTools {
-    background: rgba(18, 14, 10, 235);
-    border: 1px solid #e4b15a;
-    border-radius: 16px;
-}
-
-QWidget#dockTools QToolButton#dockTool {
-    background: #e4b15a;
-    border: none;
-    border-radius: 12px;
-    padding: 0;
-    margin: 0;
-}
-
-QWidget#dockTools QToolButton#dockTool:hover {
-    background: #f0c57a;
-}
-
-QWidget#dockTools QToolButton#dockTool[dim="true"] {
-    background: #3a3228;
-}
-
-QWidget#dockTools QToolButton#dockTool[dim="true"]:hover {
-    background: #5c4c38;
+    border-top: 1px solid #2e2822;
 }
 
 QWidget#theater {
@@ -346,6 +305,48 @@ QPushButton#modeBtn:checked {
     color: #f8ebcf;
 }
 
+QPushButton#iconBtn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0px;
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 36px;
+    max-height: 36px;
+}
+
+QPushButton#iconBtn:hover {
+    background: #2c261f;
+}
+
+QPushButton#iconBtn:checked {
+    background: #3a2e1c;
+}
+
+QPushButton#iconBtn:disabled {
+    background: transparent;
+}
+
+QPushButton#iconPrimary {
+    background: #e4b15a;
+    border: none;
+    border-radius: 8px;
+    padding: 0px;
+    min-width: 42px;
+    max-width: 42px;
+    min-height: 36px;
+    max-height: 36px;
+}
+
+QPushButton#iconPrimary:hover {
+    background: #f0c57a;
+}
+
+QPushButton#iconPrimary:disabled {
+    background: #3a342c;
+}
+
 QComboBox#libraryFilter {
     padding: 1px 8px;
     min-height: 0px;
@@ -353,14 +354,82 @@ QComboBox#libraryFilter {
     border-radius: 8px;
 }
 
+QLabel#lcdTime {
+    color: #e4b15a;
+    font-size: 9pt;
+    font-weight: 600;
+    padding: 0;
+    background: transparent;
+}
+
+QToolButton#identifyBtn[hot="true"] {
+    background: #3a2e1c;
+    border-radius: 6px;
+}
+
+QToolButton#ejectBtn {
+    background: transparent;
+    border-radius: 6px;
+}
+
+QToolButton#ejectBtn:hover {
+    background: #3a2e1c;
+}
+
+QToolButton#winBtn {
+    background: transparent;
+    border: 1px solid #4a4036;
+    border-radius: 4px;
+    padding: 0;
+}
+
+QToolButton#winBtn:hover {
+    background: #3a3228;
+}
+
+QToolButton#winBtn:checked {
+    background: #4a3b24;
+    border-color: #e4b15a;
+}
+
+QWidget#winCluster {
+    background: transparent;
+}
+
+QToolButton#navAct {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0;
+}
+
+QToolButton#navAct:hover {
+    background: #3a3228;
+}
+
+QPushButton#homeRow {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    text-align: left;
+    padding: 4px 8px;
+    color: #f3eee6;
+}
+
+QPushButton#homeRow:hover {
+    background: #2c261f;
+}
+
 QPushButton#navBtn {
     background: transparent;
     border: none;
     border-radius: 8px;
+    padding: 0px 10px 0px 8px;
+    margin: 0px;
     text-align: left;
-    padding: 8px 12px;
+    min-height: 36px;
+    max-height: 36px;
     color: #f7f1e8;
-    font-size: 13pt;
 }
 
 QPushButton#navBtn:hover {
@@ -407,6 +476,29 @@ QWidget#lcdPlayer QToolButton#transportBtn {
     min-height: 26px;
     max-height: 26px;
     border-radius: 13px;
+}
+
+QToolButton#lcdOffer {
+    background: #2a241e;
+    border: 1px solid #6a5738;
+    border-radius: 8px;
+    padding: 1px 8px;
+    margin: 0;
+    color: #f6e7c8;
+    font-size: 10pt;
+    min-height: 26px;
+    max-height: 26px;
+}
+
+QToolButton#lcdOffer:hover {
+    background: #3a2e1c;
+    border-color: #e4b15a;
+}
+
+QToolButton#lcdOffer:disabled {
+    color: #7c7368;
+    background: #1c1916;
+    border-color: #2c2722;
 }
 
 QLabel#homeGreeting {
@@ -733,8 +825,11 @@ QPushButton#railTab {
     color: #f6e7c8;
     border: 1px solid #3a322a;
     border-radius: 8px;
-    padding: 8px 10px;
-    font-weight: 600;
+    padding: 0px;
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 36px;
+    max-height: 36px;
 }
 
 QPushButton#railTab:hover {

@@ -3,6 +3,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPushButton>
+#include <QToolButton>
+#include <QToolTip>
 
 namespace {
 
@@ -359,6 +362,91 @@ QIcon Icons::spark(const QColor &color)
     });
 }
 
+QIcon Icons::identify(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const QRectF plate = r.adjusted(r.width() * 0.08, r.height() * 0.12, -r.width() * 0.08, -r.height() * 0.12);
+        p.drawRoundedRect(plate, 2.2, 2.2);
+        const qreal cx = plate.left() + plate.width() * 0.38;
+        const qreal cy = plate.center().y();
+        p.drawArc(QRectF(cx - 4.2, cy - 4.2, 8.4, 8.4), 40 * 16, 280 * 16);
+        p.drawArc(QRectF(cx - 2.4, cy - 2.4, 4.8, 4.8), 50 * 16, 260 * 16);
+        p.drawPoint(QPointF(cx, cy));
+        p.drawLine(QPointF(plate.right() - plate.width() * 0.22, plate.top() + 3.2),
+                   QPointF(plate.right() - plate.width() * 0.22, plate.bottom() - 3.2));
+    });
+}
+
+QIcon Icons::eject(const QColor &color)
+{
+    return paint(color, true, [](QPainter &p, const QRectF &r) {
+        QPainterPath path;
+        path.moveTo(r.center().x(), r.top() + r.height() * 0.06);
+        path.lineTo(r.right() - r.width() * 0.14, r.center().y() + r.height() * 0.02);
+        path.lineTo(r.left() + r.width() * 0.14, r.center().y() + r.height() * 0.02);
+        path.closeSubpath();
+        p.drawPath(path);
+        p.setBrush(Qt::NoBrush);
+        const qreal y = r.bottom() - r.height() * 0.16;
+        p.drawLine(QPointF(r.left() + r.width() * 0.16, y), QPointF(r.right() - r.width() * 0.16, y));
+    });
+}
+
+QIcon Icons::windowMin(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal y = r.bottom() - r.height() * 0.28;
+        p.drawLine(QPointF(r.left() + r.width() * 0.18, y), QPointF(r.right() - r.width() * 0.18, y));
+    });
+}
+
+QIcon Icons::windowMax(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawRoundedRect(r.adjusted(r.width() * 0.16, r.height() * 0.16, -r.width() * 0.16, -r.height() * 0.16), 1.5, 1.5);
+    });
+}
+
+QIcon Icons::windowSmall(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const QRectF box = r.adjusted(r.width() * 0.16, r.height() * 0.16, -r.width() * 0.16, -r.height() * 0.16);
+        p.drawRoundedRect(box, 1.5, 1.5);
+        const qreal y = box.top() + box.height() * 0.34;
+        p.drawLine(QPointF(box.left() + 1.5, y), QPointF(box.right() - 1.5, y));
+    });
+}
+
+QPushButton *Icons::iconButton(const QIcon &icon, const QString &tip, QWidget *parent, bool primary)
+{
+    auto *button = new QPushButton(parent);
+    button->setObjectName(primary ? QStringLiteral("iconPrimary") : QStringLiteral("iconBtn"));
+    button->setIcon(icon);
+    button->setIconSize(QSize(22, 22));
+    button->setFixedSize(primary ? 42 : 40, 36);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setToolTip(tip);
+    button->setFocusPolicy(Qt::NoFocus);
+    return button;
+}
+
+QToolButton *Icons::helpButton(const QString &text, QWidget *parent)
+{
+    auto *button = new QToolButton(parent);
+    button->setObjectName(QStringLiteral("barBtn"));
+    button->setIcon(Icons::help());
+    button->setIconSize(QSize(18, 18));
+    button->setFixedSize(28, 28);
+    button->setAutoRaise(true);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setToolTip(text);
+    QObject::connect(button, &QToolButton::clicked, button, [button, text] {
+        QToolTip::showText(button->mapToGlobal(QPoint(0, button->height() + 4)), text, button);
+    });
+    return button;
+}
+
 QIcon Icons::equalizer(const QColor &color)
 {
     return paint(color, false, [](QPainter &p, const QRectF &r) {
@@ -478,6 +566,174 @@ QIcon Icons::fullscreenExit(const QColor &color)
         p.drawLine(bl, bl + QPointF(0, arm));
         p.drawLine(br, br + QPointF(arm, 0));
         p.drawLine(br, br + QPointF(0, arm));
+    });
+}
+
+QIcon Icons::download(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal cx = r.center().x();
+        p.drawLine(QPointF(cx, r.top() + r.height() * 0.08), QPointF(cx, r.bottom() - r.height() * 0.40));
+        QPainterPath head;
+        head.moveTo(cx - r.width() * 0.22, r.center().y() - r.height() * 0.02);
+        head.lineTo(cx, r.bottom() - r.height() * 0.32);
+        head.lineTo(cx + r.width() * 0.22, r.center().y() - r.height() * 0.02);
+        p.drawPath(head);
+        const qreal left = r.left() + r.width() * 0.14;
+        const qreal right = r.right() - r.width() * 0.14;
+        const qreal top = r.bottom() - r.height() * 0.30;
+        const qreal bottom = r.bottom() - r.height() * 0.06;
+        p.drawLine(QPointF(left, top), QPointF(left, bottom));
+        p.drawLine(QPointF(left, bottom), QPointF(right, bottom));
+        p.drawLine(QPointF(right, bottom), QPointF(right, top));
+    });
+}
+
+QIcon Icons::plus(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawLine(QPointF(r.center().x(), r.top() + r.height() * 0.2),
+                   QPointF(r.center().x(), r.bottom() - r.height() * 0.2));
+        p.drawLine(QPointF(r.left() + r.width() * 0.2, r.center().y()),
+                   QPointF(r.right() - r.width() * 0.2, r.center().y()));
+    });
+}
+
+QIcon Icons::rows(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal x0 = r.left() + r.width() * 0.16;
+        const qreal x1 = r.right() - r.width() * 0.14;
+        p.drawLine(QPointF(x0, r.top() + r.height() * 0.28), QPointF(x1, r.top() + r.height() * 0.28));
+        p.drawLine(QPointF(x0, r.center().y()), QPointF(x1, r.center().y()));
+        p.drawLine(QPointF(x0, r.bottom() - r.height() * 0.28), QPointF(x1, r.bottom() - r.height() * 0.28));
+    });
+}
+
+QIcon Icons::grid(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal s = r.width() * 0.28;
+        const qreal gap = r.width() * 0.1;
+        const qreal x0 = r.left() + r.width() * 0.16;
+        const qreal y0 = r.top() + r.height() * 0.16;
+        p.drawRoundedRect(QRectF(x0, y0, s, s), 1.5, 1.5);
+        p.drawRoundedRect(QRectF(x0 + s + gap, y0, s, s), 1.5, 1.5);
+        p.drawRoundedRect(QRectF(x0, y0 + s + gap, s, s), 1.5, 1.5);
+        p.drawRoundedRect(QRectF(x0 + s + gap, y0 + s + gap, s, s), 1.5, 1.5);
+    });
+}
+
+QIcon Icons::person(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawEllipse(QPointF(r.center().x(), r.top() + r.height() * 0.28), r.width() * 0.16, r.width() * 0.16);
+        p.drawArc(QRectF(r.left() + r.width() * 0.16, r.top() + r.height() * 0.46, r.width() * 0.68, r.height() * 0.62),
+                  15 * 16, 150 * 16);
+    });
+}
+
+QIcon Icons::album(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawEllipse(r.center(), r.width() * 0.38, r.height() * 0.38);
+        p.drawEllipse(r.center(), r.width() * 0.08, r.height() * 0.08);
+    });
+}
+
+QIcon Icons::tag(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPainterPath path;
+        path.moveTo(r.left() + r.width() * 0.14, r.top() + r.height() * 0.28);
+        path.lineTo(r.right() - r.width() * 0.30, r.top() + r.height() * 0.28);
+        path.lineTo(r.right() - r.width() * 0.12, r.center().y());
+        path.lineTo(r.right() - r.width() * 0.30, r.bottom() - r.height() * 0.28);
+        path.lineTo(r.left() + r.width() * 0.14, r.bottom() - r.height() * 0.28);
+        path.closeSubpath();
+        p.drawPath(path);
+        p.setBrush(p.pen().color());
+        p.drawEllipse(QPointF(r.left() + r.width() * 0.34, r.center().y()), r.width() * 0.06, r.width() * 0.06);
+    });
+}
+
+QIcon Icons::shows(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawRoundedRect(QRectF(r.left() + r.width() * 0.24, r.top() + r.height() * 0.10,
+                                 r.width() * 0.62, r.height() * 0.48),
+                          1.5, 1.5);
+        p.drawRoundedRect(QRectF(r.left() + r.width() * 0.12, r.top() + r.height() * 0.40,
+                                 r.width() * 0.62, r.height() * 0.48),
+                          1.5, 1.5);
+    });
+}
+
+QIcon Icons::collection(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal s = r.width() * 0.22;
+        const qreal y = r.center().y() - s / 2;
+        const qreal gap = r.width() * 0.08;
+        const qreal x0 = r.center().x() - (s * 1.5 + gap);
+        p.drawRoundedRect(QRectF(x0, y, s, s), 1.4, 1.4);
+        p.drawRoundedRect(QRectF(x0 + s + gap, y, s, s), 1.4, 1.4);
+        p.drawRoundedRect(QRectF(x0 + (s + gap) * 2, y, s, s), 1.4, 1.4);
+    });
+}
+
+QIcon Icons::trash(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const qreal top = r.top() + r.height() * 0.30;
+        const qreal left = r.left() + r.width() * 0.26;
+        const qreal right = r.right() - r.width() * 0.26;
+        p.drawLine(QPointF(r.left() + r.width() * 0.18, top), QPointF(r.right() - r.width() * 0.18, top));
+        p.drawLine(QPointF(r.center().x() - r.width() * 0.12, r.top() + r.height() * 0.14),
+                   QPointF(r.center().x() + r.width() * 0.12, r.top() + r.height() * 0.14));
+        p.drawRoundedRect(QRectF(left, top, right - left, r.bottom() - r.height() * 0.12 - top), 1.2, 1.2);
+    });
+}
+
+QIcon Icons::pencil(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPainterPath path;
+        path.moveTo(r.left() + r.width() * 0.18, r.bottom() - r.height() * 0.22);
+        path.lineTo(r.right() - r.width() * 0.22, r.top() + r.height() * 0.18);
+        path.lineTo(r.right() - r.width() * 0.10, r.top() + r.height() * 0.30);
+        path.lineTo(r.left() + r.width() * 0.30, r.bottom() - r.height() * 0.10);
+        path.closeSubpath();
+        p.drawPath(path);
+    });
+}
+
+QIcon Icons::minus(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        p.drawLine(QPointF(r.left() + r.width() * 0.22, r.center().y()),
+                   QPointF(r.right() - r.width() * 0.22, r.center().y()));
+    });
+}
+
+QIcon Icons::back(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        QPainterPath path;
+        path.moveTo(r.right() - r.width() * 0.28, r.top() + r.height() * 0.18);
+        path.lineTo(r.left() + r.width() * 0.28, r.center().y());
+        path.lineTo(r.right() - r.width() * 0.28, r.bottom() - r.height() * 0.18);
+        p.drawPath(path);
+    });
+}
+
+QIcon Icons::dismiss(const QColor &color)
+{
+    return paint(color, false, [](QPainter &p, const QRectF &r) {
+        const QPointF a(r.left() + r.width() * 0.26, r.top() + r.height() * 0.26);
+        const QPointF b(r.right() - r.width() * 0.26, r.bottom() - r.height() * 0.26);
+        p.drawLine(a, b);
+        p.drawLine(QPointF(a.x(), b.y()), QPointF(b.x(), a.y()));
     });
 }
 

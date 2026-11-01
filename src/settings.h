@@ -6,6 +6,18 @@
 #include <QSettings>
 #include <QStringList>
 
+struct SavedStation {
+    QString name;
+    QString url;
+    QString category;
+};
+
+struct SavedPlaylist {
+    QString id;
+    QString name;
+    QString thumbId;
+};
+
 class Settings : public QObject {
     Q_OBJECT
 public:
@@ -62,11 +74,14 @@ public:
     QString organizeDir() const;
     void setOrganizeDir(const QString &dir);
 
-    // name, stream url
-    QList<QPair<QString, QString>> radioStations() const;
-    void setRadioStations(const QList<QPair<QString, QString>> &stations);
+    // name, stream url, category
+    QList<SavedStation> radioStations() const;
+    void setRadioStations(const QList<SavedStation> &stations);
     // channel id, name
     QList<QPair<QString, QString>> youtubeChannels() const;
+    // playlist id, name, thumbnail video id
+    QList<SavedPlaylist> youtubePlaylists() const;
+    void setYoutubePlaylists(const QList<SavedPlaylist> &playlists);
     void setYoutubeChannels(const QList<QPair<QString, QString>> &channels);
     // Absent until the first toggle. Until then every saved channel counts as checked.
     bool hasYoutubeChecked() const;

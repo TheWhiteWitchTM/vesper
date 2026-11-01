@@ -205,6 +205,39 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const
     const Track &track = rows_.at(index.row());
     if (role == CoverRoles::TrackRole)
         return QVariant::fromValue(track);
+    if (role == CoverRoles::Title)
+        return videoLayout_ ? videoTitle(track, includeShowInTitle_) : track.displayTitle();
+    if (role == CoverRoles::Subtitle) {
+        if (track.isVideo()) {
+            const QString show = track.showName.trimmed();
+            if (!show.isEmpty() && show.compare(track.displayTitle(), Qt::CaseInsensitive) != 0)
+                return show;
+            return track.year > 0 ? QString::number(track.year) : QString();
+        }
+        const QString artist = track.displayArtist();
+        return artist == QLatin1String("Unknown artist") ? QString() : artist;
+    }
+    if (role == CoverRoles::ArtPath)
+        return track.artwork;
+    if (role == CoverRoles::Key)
+        return QString::number(track.id);
+    if (role == CoverRoles::Artist)
+        return track.albumKeyArtist();
+    if (role == CoverRoles::AlbumName)
+        return track.displayAlbum();
+    if (role == CoverRoles::Badge) {
+        if (track.episode > 0 || track.season > 0) {
+            return QStringLiteral("S%1E%2")
+                .arg(qMax(0, track.season), 2, 10, QChar('0'))
+                .arg(qMax(0, track.episode), 2, 10, QChar('0'));
+        }
+        return track.year > 0 ? QString::number(track.year) : QString();
+    }
+    if (role == CoverRoles::Progress) {
+        if (track.durationMs <= 0 || track.positionMs < 10000)
+            return -1;
+        return qBound(0, int(track.positionMs * 100LL / track.durationMs), 100);
+    }
     if (role == Qt::TextAlignmentRole && (index.column() == 1 || index.column() == 5))
         return int(Qt::AlignRight | Qt::AlignVCenter);
     if (role == Qt::ForegroundRole && index.column() == 0 && track.id == nowId_ && nowId_ != 0)

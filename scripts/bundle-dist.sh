@@ -6,7 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-if [[ ! -x "$ROOT/build/vesper" ]]; then
+BIN="${VESPER_BIN:-$ROOT/build/vesper}"
+if [[ ! -x "$BIN" ]]; then
     echo "vesper: build the binary first (scripts/build.sh)" >&2
     exit 1
 fi
@@ -15,7 +16,7 @@ if [[ -n "${QT_PREFIX:-}" && -e "$QT_PREFIX/lib/libQt6Core.so" ]]; then
     qt_prefix="$(cd "$QT_PREFIX" && pwd)"
     qt_lib="$qt_prefix/lib"
 else
-    core="$(ldd "$ROOT/build/vesper" | awk '/libQt6Core\.so/{print $3; exit}')"
+    core="$(ldd "$BIN" | awk '/libQt6Core\.so/{print $3; exit}')"
     if [[ -z "$core" || ! -e "$core" ]]; then
         echo "vesper: could not locate libQt6Core for the binary" >&2
         exit 1
@@ -27,7 +28,7 @@ fi
 rm -rf "$ROOT/dist"
 mkdir -p "$ROOT/dist/bin" "$ROOT/dist/lib" "$ROOT/dist/plugins"
 
-cp -a "$ROOT/build/vesper" "$ROOT/dist/bin/vesper"
+cp -a "$BIN" "$ROOT/dist/bin/vesper"
 cat > "$ROOT/dist/bin/qt.conf" << 'EOF'
 [Paths]
 Prefix = ..
@@ -126,6 +127,19 @@ while [[ ${#queue[@]} -gt 0 ]]; do
     done < <(ldd "$bin" || true)
 done
 
+# libVLC and TagLib are not in the Qt tree. The launcher puts dist/lib first.
+while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    case "$line" in
+        *libvlc.so*|*libvlccore.so*|*libtag.so*|*libidn.so*)
+            resolved="$(awk '{print $3}' <<< "$line")"
+            if [[ -n "$resolved" && -e "$resolved" ]]; then
+                copy_lib "$resolved"
+            fi
+            ;;
+    esac
+done < <(ldd "$BIN" || true)
+
 cat > "$ROOT/dist/vesper" << 'EOF'
 #!/bin/sh
 # Launch the bundled player. Qt libraries and plugins live next to this script.
@@ -154,6 +168,9 @@ for need in \
     lib/libQt6Widgets.so.6 \
     lib/libQt6Sql.so.6 \
     lib/libQt6Network.so.6 \
+    lib/libvlc.so.5 \
+    lib/libvlccore.so.9 \
+    lib/libtag.so.1 \
     plugins/platforms/libqoffscreen.so \
     plugins/platforms/libqxcb.so \
     plugins/platforms/libqwayland.so \

@@ -1,5 +1,6 @@
 #include "ui/equalizer.h"
 
+#include "icons.h"
 #include "player.h"
 #include "settings.h"
 
@@ -130,13 +131,16 @@ EqualizerDialog::EqualizerDialog(Player *player, Settings *settings, QWidget *pa
     auto *title = new QLabel(QStringLiteral("Equalizer"));
     auto *dismiss = new QToolButton(this);
     dismiss->setObjectName(QStringLiteral("barBtn"));
-    dismiss->setText(QStringLiteral("×"));
+    dismiss->setIcon(Icons::dismiss());
+    dismiss->setIconSize(QSize(14, 14));
     dismiss->setToolTip(QStringLiteral("Close"));
     dismiss->setCursor(Qt::PointingHandCursor);
     dismiss->setAutoRaise(true);
     dismiss->setFixedSize(28, 28);
     dismiss->setFocusPolicy(Qt::NoFocus);
     titleRow->addWidget(title, 1);
+    titleRow->addWidget(Icons::helpButton(QStringLiteral(
+        "Bands are in dB, from −20 to +20. Night takes the edge off late listening."), this));
     titleRow->addWidget(dismiss);
     connect(dismiss, &QToolButton::clicked, this, &QDialog::reject);
     title->setObjectName(QStringLiteral("section"));
@@ -144,10 +148,6 @@ EqualizerDialog::EqualizerDialog(Player *player, Settings *settings, QWidget *pa
     layout->addLayout(top);
     layout->addLayout(preampRow);
     layout->addLayout(bandRow, 1);
-    auto *note = new QLabel(QStringLiteral("Bands are in dB, from −20 to +20. Night takes the edge off late listening."));
-    note->setObjectName(QStringLiteral("muted"));
-    note->setWordWrap(true);
-    layout->addWidget(note);
     layout->addLayout(buttons);
 
     connect(preamp_, &QSlider::valueChanged, this, [this, preampValue](int value) {

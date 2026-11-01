@@ -1,5 +1,6 @@
 #include "ui/settingsview.h"
 
+#include "icons.h"
 #include "library.h"
 #include "player.h"
 #include "settings.h"
@@ -60,29 +61,12 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     startup->setChecked(settings_->scanAtStartup());
     kidsBox_ = new QCheckBox(QStringLiteral("Kids are here — shuffle plays only G"));
     kidsBox_->setChecked(settings_->kidsMode());
-    auto *kidsNote = new QLabel(QStringLiteral(
-        "Label a file G, PG, or R from its menu, or click the Label column on Songs. "
-        "Anything imported from a folder named private is R. Unlabeled files stay out of that shuffle."));
-    kidsNote->setObjectName(QStringLiteral("muted"));
-    kidsNote->setWordWrap(true);
-    auto *identifyBox = new QCheckBox(QStringLiteral("Ask Grok to name one id-only file or series a day"));
+    auto *identifyBox = new QCheckBox(QStringLiteral("Ask Grok as a last resort for one id-only file a day"));
     identifyBox->setChecked(settings_->identifyEnabled());
     auto *identifyNow = new QPushButton(QStringLiteral("Identify one now"));
     identifyNote_ = new QLabel(settings_->identifyNote());
     identifyNote_->setObjectName(QStringLiteral("muted"));
     identifyNote_->setWordWrap(true);
-    auto *roleNote = new QLabel(QStringLiteral(
-        "Music videos play as video and are listed with your songs. "
-        "A folder named Series, Movies, Music, or Musik is read from its name when you leave this on decide."));
-    roleNote->setObjectName(QStringLiteral("muted"));
-    roleNote->setWordWrap(true);
-    auto *organizeNote = new QLabel(QStringLiteral(
-        "Organize keeps the folder word you already use, such as Series, Shows, Movies, or Musik. "
-        "A file under Series is a show. Scene names get a real title. Tagged music goes under Artist / Album. "
-        "Right-click a file, or the one that is playing, to rename it and write the tags. "
-        "A season folder of id-named episodes is numbered from the show name without a lookup."));
-    organizeNote->setObjectName(QStringLiteral("muted"));
-    organizeNote->setWordWrap(true);
 
     devices_ = new QComboBox;
     auto *eq = new QPushButton(QStringLiteral("Equalizer"));
@@ -98,27 +82,6 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     skipEdit_->setPlaceholderText(QStringLiteral("Folder names to skip, separated by commas"));
     skipEdit_->setText(settings_->skipNames().join(QStringLiteral(", ")));
 
-    auto *keys = new QLabel(QStringLiteral(
-        "<b>Space</b> play or pause &nbsp;·&nbsp; <b>← →</b> seek 10s &nbsp;·&nbsp; "
-        "<b>Shift + ← →</b> seek 1 min &nbsp;·&nbsp; <b>↑ ↓</b> volume<br>"
-        "<b>N</b> next &nbsp;·&nbsp; <b>P</b> previous &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; "
-        "<b>H</b> favorite &nbsp;·&nbsp; <b>F11</b> fills the screen, and the dock still opens &nbsp;·&nbsp; <b>F12</b> real full screen &nbsp;·&nbsp; <b>Esc</b> leaves it &nbsp;·&nbsp; <b>0–9</b> jump in the track<br>"
-        "<b>Ctrl+F</b> search &nbsp;·&nbsp; <b>Ctrl+O</b> open files &nbsp;·&nbsp; "
-        "<b>Ctrl+U</b> open a stream &nbsp;·&nbsp; <b>Ctrl+Q</b> quit<br>"
-        "Media keys work through the desktop, including on the lock screen controls."));
-    keys->setObjectName(QStringLiteral("muted"));
-    keys->setWordWrap(true);
-    keys->setTextFormat(Qt::RichText);
-
-    auto *blurb = new QLabel(QStringLiteral(
-        "Vesper uses libVLC for playback. Artwork comes from the file, then iTunes Search, "
-        "MusicBrainz, and the Cover Art Archive. Lyrics come from LRCLIB. "
-        "Video summaries come from iTunes and Wikipedia. Artwork lookup leaves the file alone. "
-        "Rename and Edit details write tags and can rename the file. "
-        "Vesper is released under the MIT license."));
-    blurb->setWordWrap(true);
-    blurb->setObjectName(QStringLiteral("muted"));
-
     auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -130,7 +93,8 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     titleRow->setContentsMargins(0, 0, 0, 0);
     auto *dismiss = new QToolButton(inner);
     dismiss->setObjectName(QStringLiteral("barBtn"));
-    dismiss->setText(QStringLiteral("×"));
+    dismiss->setIcon(Icons::dismiss());
+    dismiss->setIconSize(QSize(14, 14));
     dismiss->setToolTip(QStringLiteral("Close"));
     dismiss->setCursor(Qt::PointingHandCursor);
     dismiss->setAutoRaise(true);
@@ -144,8 +108,10 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     auto *roleRow = new QHBoxLayout;
     roleRow->addWidget(new QLabel(QStringLiteral("Folder contains")));
     roleRow->addWidget(roleBox_, 1);
+    roleRow->addWidget(Icons::helpButton(QStringLiteral(
+        "Music videos play as video and are listed with your songs.\n"
+        "A folder named Series, Movies, Music, or Musik is read from its name when this stays on decide.")));
     layout->addLayout(roleRow);
-    layout->addWidget(roleNote);
     layout->addLayout(folderButtons);
     layout->addWidget(online);
     layout->addWidget(resume);
@@ -153,12 +119,26 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     layout->addWidget(gain);
     layout->addWidget(startup);
     layout->addSpacing(8);
-    layout->addWidget(new QLabel(QStringLiteral("When kids are here")));
+    auto *kidsRow = new QHBoxLayout;
+    kidsRow->addWidget(new QLabel(QStringLiteral("When kids are here")));
+    kidsRow->addWidget(Icons::helpButton(QStringLiteral(
+        "Label a file G, PG, or R from its menu, or the Label column on Songs.\n"
+        "A folder named private is R. Unlabeled files stay out of kids shuffle.")));
+    kidsRow->addStretch();
+    layout->addLayout(kidsRow);
     layout->addWidget(kidsBox_);
-    layout->addWidget(kidsNote);
     layout->addSpacing(8);
-    layout->addWidget(new QLabel(QStringLiteral("Library")));
-    layout->addWidget(organizeNote);
+    auto *libraryRow = new QHBoxLayout;
+    libraryRow->addWidget(new QLabel(QStringLiteral("Library")));
+    libraryRow->addWidget(Icons::helpButton(QStringLiteral(
+        "Organize keeps the folder word you already use, such as Series, Shows, Movies, or Musik.\n"
+        "A file under Series is a show. Scene names get a real title. Tagged music goes under Artist / Album.\n"
+        "Right-click a file, or the one that is playing, to rename it and write the tags.\n"
+        "A season folder of id-named episodes is numbered from the show name without a lookup.\n"
+        "Id-only names are also cleaned from sidecars, folder words, YouTube ids, file hashes, "
+        "and a reverse image search of a still.")));
+    libraryRow->addStretch();
+    layout->addLayout(libraryRow);
     layout->addWidget(identifyBox);
     auto *identifyRow = new QHBoxLayout;
     identifyRow->addWidget(identifyNow);
@@ -166,12 +146,16 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     layout->addLayout(identifyRow);
     layout->addWidget(identifyNote_);
     layout->addSpacing(8);
-    layout->addWidget(new QLabel(QStringLiteral("Volume")));
+    auto *volumeHead = new QHBoxLayout;
+    volumeHead->addWidget(new QLabel(QStringLiteral("Volume")));
+    volumeHead->addWidget(Icons::helpButton(QStringLiteral(
+        "100% is normal. It starts at 90% and stays where you leave it.")));
+    volumeHead->addStretch();
+    layout->addLayout(volumeHead);
     auto *volumeRow = new QHBoxLayout;
     volumeRow->addWidget(volume, 1);
     volumeRow->addWidget(volumeText);
     layout->addLayout(volumeRow);
-    layout->addWidget(new QLabel(QStringLiteral("100% is normal. It starts at 90% and remembers the level you leave it on.")));
     layout->addWidget(new QLabel(QStringLiteral("Audio device")));
     layout->addWidget(devices_);
     auto *tools = new QHBoxLayout;
@@ -183,10 +167,6 @@ SettingsView::SettingsView(Library *library, Settings *settings, Player *player,
     layout->addLayout(tools);
     layout->addWidget(new QLabel(QStringLiteral("Skip these folder names while scanning")));
     layout->addWidget(skipEdit_);
-    layout->addSpacing(8);
-    layout->addWidget(new QLabel(QStringLiteral("Keys")));
-    layout->addWidget(keys);
-    layout->addWidget(blurb);
     layout->addStretch();
     scroll->setWidget(inner);
     auto *outer = new QVBoxLayout(this);
